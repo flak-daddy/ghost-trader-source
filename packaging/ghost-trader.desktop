@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Ghost Trader
+Comment=Paper-trade covered calls and cash-secured puts
+Exec=ghost-trader
+Icon=ghost-trader
+Terminal=false
+Categories=Office;Finance;
+StartupWMClass=Ghost Trader

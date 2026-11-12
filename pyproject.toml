@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghost-trader"
+dynamic = ["version"]
+description = "Paper-trade TQQQ covered calls and cash-secured puts, with real quotes and strict rules."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "ghost_trader/static/fonts/OFL.txt"]
+requires-python = ">=3.11"
+dependencies = ["yfinance>=0.2.50", "pywebview>=5.3"]
+
+[project.urls]
+Homepage = "https://github.com/flak-daddy/ghost-trader-source"
+
+[project.scripts]
+ghost-trader = "ghost_trader.__main__:main"
+
+[tool.setuptools]
+packages = ["ghost_trader"]
+
+[tool.setuptools.dynamic]
+version = {attr = "ghost_trader.__version__"}
+
+[tool.setuptools.package-data]
+ghost_trader = ["static/*", "static/fonts/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501", "E731"]

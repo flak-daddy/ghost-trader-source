@@ -1,0 +1,30 @@
+# Maintainer: flak-daddy
+# Built from the public source mirror; updated automatically by the release workflow.
+pkgname=ghost-trader
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Paper-trade TQQQ covered calls and cash-secured puts with real (delayed) quotes and strict rules"
+arch=('any')
+url="https://github.com/flak-daddy/ghost-trader-source"
+license=('MIT' 'OFL-1.1')
+depends=('python' 'python-gobject' 'webkit2gtk-4.1' 'python-pywebview' 'python-yfinance')
+makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+optdepends=('libnotify: expiration-day desktop notifications'
+            'mako: a notification daemon for Hyprland/Sway, so the notifications show'
+            'chromium: fallback window if the built-in one fails'
+            'zenity: Save-as dialogs in the Firefox fallback')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('@SHA256@')
+
+build() {
+  cd "ghost-trader-source-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "ghost-trader-source-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 packaging/ghost-trader.desktop "$pkgdir/usr/share/applications/ghost-trader.desktop"
+  install -Dm644 ghost_trader/static/icon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/ghost-trader.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

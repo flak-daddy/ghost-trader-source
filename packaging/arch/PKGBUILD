@@ -1,0 +1,32 @@
+# Build Ghost Trader straight from the public source repo (no AUR account needed):
+#   git clone https://github.com/flak-daddy/ghost-trader-source.git
+#   cd ghost-trader-source/packaging/arch && yay -Bi .
+# Update later:  cd ghost-trader-source && git pull && cd packaging/arch && yay -Bi .
+pkgname=ghost-trader
+pkgver=1.4.0
+pkgrel=1
+pkgdesc="Paper-trade TQQQ covered calls and cash-secured puts with real (delayed) quotes and strict rules"
+arch=('any')
+url="https://github.com/flak-daddy/ghost-trader-source"
+license=('MIT' 'OFL-1.1')
+depends=('python' 'python-gobject' 'webkit2gtk-4.1' 'python-pywebview' 'python-yfinance')
+makedepends=('git' 'python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+optdepends=('libnotify: expiration-day desktop notifications'
+            'mako: a notification daemon for Hyprland/Sway, so the notifications show'
+            'chromium: fallback window if the built-in one fails'
+            'zenity: Save-as dialogs in the Firefox fallback')
+source=("ghost-trader::git+$url.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+build() {
+  cd ghost-trader
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd ghost-trader
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 packaging/ghost-trader.desktop "$pkgdir/usr/share/applications/ghost-trader.desktop"
+  install -Dm644 ghost_trader/static/icon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/ghost-trader.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
