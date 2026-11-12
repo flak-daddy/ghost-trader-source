@@ -1,0 +1,20 @@
+post_install() {
+  cat <<'MSG'
+
+  Ghost Trader is installed. Launch it from your app menu or run: ghost-trader
+
+  Optional, recommended: a free Alpha Vantage key for the interest rate on cash
+    1. Open https://www.alphavantage.co/support/#api-key
+    2. Fill in the short form (email + a word about what it's for); the key appears right on the page
+    3. In Ghost Trader: Settings -> Alpha Vantage API key -> paste it
+  Without a key the rate comes from Yahoo's ^IRX instead.
+
+  For expiration-day notifications on Hyprland/Sway: sudo pacman -S libnotify mako
+  (then add "exec-once = mako" to your Hyprland config)
+
+MSG
+}
+
+post_upgrade() {
+  echo "  Ghost Trader updated. Your account and settings are kept."
+}

@@ -303,3 +303,12 @@ def test_pkgbuild_template():
 def test_source_pkgbuild_template():
     text = open("packaging/arch/PKGBUILD").read()
     assert "pkgver=@VERSION@" in text and "#tag=v$pkgver" in text and "yay -Bi ." in text
+
+
+def test_install_message_and_links(home):
+    msg = open("packaging/ghost-trader.install").read()
+    assert "https://www.alphavantage.co/support/#api-key" in msg
+    assert open("packaging/arch/ghost-trader.install").read() == msg
+    for p in ("packaging/aur/PKGBUILD", "packaging/arch/PKGBUILD"):
+        assert "install=ghost-trader.install" in open(p).read()
+    assert App(demo=True).api_open_link(name="nope")["error"]

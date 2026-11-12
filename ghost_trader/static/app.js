@@ -606,6 +606,7 @@ async function renderSettings() {
   $("#main").innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;max-width:1150px">
   <div class=card><h2 style="margin-top:0">Data & interest</h2>
     <div class=row><label>Alpha Vantage API key</label><span><input id=key type=password value="${esc(cfg.av_key)}" style="width:200px" placeholder="paste your key"> <button class="btn small" id=keyShow>Show</button></span></div>
+    <div class=row><label></label><span class=meta>${cfg.av_key ? "" : "No key yet: the rate comes from ^IRX. "}<span class=lnk style="color:var(--accent)" id=avLink>Get a free key</span> (about a minute; the key shows right on the page)</span></div>
     <div class=row><label>Rate source</label><span>3-mo Treasury · ${rate}</span></div>
     <div class=row><label>Fallbacks</label><span class=meta>^IRX (Yahoo) → manual rate</span></div>
     <div class=row><label>Manual rate (last resort)</label><input id=man value="${cfg.manual_rate == null ? "" : esc(cfg.manual_rate) + "%"}" placeholder="e.g. 4.24%" style="width:90px"></div>
@@ -640,6 +641,7 @@ async function renderSettings() {
     <div class=row><span><b>Close run</b><div class=meta>Ends this run, pays out accrued interest, saves the run CSV, and starts a new run. Can't be undone.</div></span><button class="btn danger" id=closeRunBtn>Close run</button></div></div>` : ""}`;
   const save = async kv => { const r = await api("settings_set", kv); if (r.error) toast(esc(r.error)); else toast(`${I("check")} Saved`, 1500); };
   $("#keyShow").onclick = () => { const k = $("#key"); k.type = k.type === "password" ? "text" : "password"; };
+  $("#avLink").onclick = async () => { const r = await api("open_link", {name: "av_key"}); if (r.error) toast(esc(r.error), 8000); else toast(`${I("check")} Opened alphavantage.co in your browser`); };
   $("#key").onchange = e => save({av_key: e.target.value.trim()});
   $("#man").onchange = e => save({manual_rate: e.target.value.trim()});
   $("#hc").onchange = e => save({haircut: e.target.value.trim()});
@@ -691,6 +693,7 @@ function newRun() {
   $("#overlay").innerHTML = `<div class=scrim><div class=modal style="width:480px"><div class=meta>NEW RUN</div><h3>How much paper cash should this run start with?</h3>
     <div class=row style="margin-top:14px"><label>Starting cash</label><input id=sc value="$100,000.00" style="width:180px;font-size:16px"></div>
     <div class=meta>Rules for every run: covered calls and cash-secured puts only · all cash earns the 3-month T-bill rate, paid on the 15th · no fees.</div>
+    <div class=meta style="margin-top:6px">Tip: a free Alpha Vantage key (Settings) gives the most accurate interest rate. Optional.</div>
     <div id=scErr class=err></div>
     <div class=actions><button class="btn primary" id=scb>Start run</button></div></div></div>`;
   $("#sc").select();

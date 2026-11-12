@@ -38,15 +38,38 @@ cash-secured puts, and share buys and sells. You make every trade decision; the 
 
 The full design lives in the project spec (`ghost-trader-spec.md` in the Claude project).
 
-## Install from the AUR (for anyone)
+## Install (Arch Linux)
+
+From the AUR, once the package is listed there:
 
 ```
 yay -S ghost-trader
 ```
 
-Then launch **Ghost Trader** from the app menu (or run `ghost-trader`). Updates arrive with `yay -Syu`, and the
-app mentions at startup when a newer version is out. Optional: `libnotify` + `mako` for the expiration-day
-notification, and a free Alpha Vantage key in Settings (otherwise the rate comes from ^IRX).
+Until then, build it straight from this repo (yay pulls in the dependencies, including python-yfinance):
+
+```
+git clone https://github.com/flak-daddy/ghost-trader-source.git
+cd ghost-trader-source/packaging/arch
+yay -Bi .
+```
+
+## First launch
+
+1. Open **Ghost Trader** from your app menu (or run `ghost-trader`). It refreshes its data, then asks how much paper
+   cash to start with. You get your own paper account; nothing is shared with anyone.
+2. **Free Alpha Vantage key (optional, recommended).** It supplies the 3-month Treasury rate that your cash earns.
+   - Open https://www.alphavantage.co/support/#api-key
+   - Fill in the short form (an email and a word about what it's for). The key appears right on the page;
+     there's no confirmation email.
+   - In Ghost Trader, open **Settings → Alpha Vantage API key**, paste it, and click outside the box to save.
+     Settings also has a **Get a free key** link to that page.
+   - The free tier allows about 25 requests a day; Ghost Trader uses one or two per launch. Without a key,
+     the rate comes from Yahoo's ^IRX instead.
+3. **Expiration-day notifications (optional).** On Hyprland or Sway: `sudo pacman -S libnotify mako`, then add
+   `exec-once = mako` to your Hyprland config. Use **Settings → Send test** to check.
+4. **Updates.** When a new version is out, Ghost Trader says so at startup. Run `yay -Syu` (AUR install), or
+   `git pull` in `ghost-trader-source` and then `yay -Bi .` in `packaging/arch` (built from the repo).
 
 ## Install for development (Arch + Hyprland)
 

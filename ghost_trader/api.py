@@ -838,6 +838,19 @@ class App:
         Path(path).write_text(text)
         return {"ok": True, "path": str(path)}
 
+    LINKS = {"av_key": "https://www.alphavantage.co/support/#api-key"}
+
+    def api_open_link(self, name):
+        url = self.LINKS.get(name)
+        if not url:
+            return {"error": "Unknown link."}
+        try:
+            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            return {"ok": True, "url": url}
+        except OSError as e:
+            return {"error": f"Couldn't open your browser: {e}. The page is {url}"}
+
     def api_open_folder(self):
         try:
             subprocess.Popen(["xdg-open", str(config.data_dir())], stdout=subprocess.DEVNULL,
