@@ -65,15 +65,32 @@ def check():
         return None
     _git("fetch", "--tags", "--force", "--quiet", "origin", timeout=40)
     cur = parse_version(__version__)
-    best = None
-    for t in _git("tag", "-l", "v*").splitlines():
-        v = parse_version(t)
-        if v and v > cur and (best is None or v > best[0]):
-            best = (v, t)
-    if not best:
+    newer = sorted(((v, t) for t in _git("tag", "-l", "v*").splitlines() if (v := parse_version(t)) and v > cur),
+                   reverse=True)
+    if not newer:
         return None
-    notes = _git("tag", "-l", "--format=%(contents)", best[1]).strip()
-    return {"tag": best[1], "version": ".".join(map(str, best[0])), "notes": notes}
+    best = newer[0]
+    notes = combined_notes([(t, _git("tag", "-l", "--format=%(contents)", t)) for _, t in newer])
+    return {"tag": best[1], "version": ".".join(map(str, best[0])), "notes": notes, "skipped": len(newer) - 1}
+
+
+MAX_NOTES = 12   # releases listed in full; anything older is summed up in one line
+
+
+def combined_notes(items):
+    """Change list for an update that may jump several releases: every release between this version and the
+    newest, newest first, each under its own version line. `items` = [(tag, tag message), ...] newest first."""
+    items = [(t, (n or "").strip()) for t, n in items]
+    if len(items) == 1:
+        return items[0][1]
+    shown, rest = items[:MAX_NOTES], items[MAX_NOTES:]
+    out = [f"This update includes {len(items)} releases since v{__version__}:"]
+    for t, n in shown:
+        lines = [ln for ln in n.splitlines() if ln.strip()] or ["- Maintenance release"]
+        out.append(f"\n{t}\n" + "\n".join(lines))
+    if rest:
+        out.append(f"\n…and {len(rest)} earlier release{'s' if len(rest) > 1 else ''} ({rest[-1][0]} to {rest[0][0]}).")
+    return "\n".join(out)
 
 
 def check_public(timeout=10):

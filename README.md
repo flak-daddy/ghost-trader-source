@@ -105,7 +105,7 @@ can try things without touching your real run.
 2. The **Tests** workflow runs on each PR. A PR that changes the app must also raise `__version__` in
    `ghost_trader/__init__.py`.
 3. When the PR is merged, the **Release** workflow tags `vX.Y.Z`. The tag message is the change list.
-4. At the next startup, Ghost Trader asks "Update to vX.Y.Z?" and shows that change list. If you say yes, it
+4. At the next startup, Ghost Trader asks "Update to vX.Y.Z?" and shows that change list (when it jumps several releases, every skipped release's list, newest first). If you say yes, it
    backs up the ledger, checks out the tag and restarts.
 5. If the new version fails its self-check, the app goes back to the previous release and restores the
    backup. If the new version crashes before it can run the self-check, the launcher does the same.

@@ -84,7 +84,7 @@ body.withDrawer main{margin-right:min(480px,0px + 480px)}
 @keyframes spin{to{transform:rotate(360deg)}}.spin{animation:spin 1s linear infinite;display:inline-block}
 
 .issue{margin-top:14px;padding:12px 14px;border-radius:8px;border:1px solid color-mix(in srgb,var(--warn) 50%,var(--line));background:var(--panel2)}
-.issue pre{white-space:pre-wrap;font:inherit;margin:6px 0}
+.issue pre{white-space:pre-wrap;font:inherit;margin:6px 0;max-height:46vh;overflow:auto}
 .issue .opts{display:flex;flex-direction:column;gap:8px;margin-top:10px}.issue .opts>div{display:flex;gap:8px;align-items:center}
 .empty{padding:28px;text-align:center;color:var(--dim)}
 .errbox{margin-top:8px;padding:8px 10px;border-radius:6px;background:var(--panel2);font-size:12.5px;line-height:1.6}
