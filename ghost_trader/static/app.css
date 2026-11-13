@@ -110,3 +110,26 @@ input.bad{border-color:var(--down)}
 .cal .ev.exdiv{background:color-mix(in srgb,var(--s2) 16%,transparent)}
 .cal .evs{display:flex;flex-wrap:wrap;gap:3px}
 .mini.story{table-layout:fixed}.mini.story td{white-space:normal;vertical-align:top}.mini.story td.l{width:38%}
+
+/* help / manual */
+.help{display:grid;grid-template-columns:240px minmax(0,780px);gap:28px;align-items:start}
+.helptoc{position:sticky;top:72px;max-height:calc(100vh - 90px);overflow:auto;display:flex;flex-direction:column;font-size:13px;padding-right:6px}
+.helptoc a{color:var(--text);text-decoration:none;padding:3px 6px;border-radius:5px}.helptoc a:hover{background:var(--panel2)}
+.helptoc a.t2{font-weight:600;margin-top:6px}.helptoc a.t3{color:var(--dim);padding-left:16px}
+@media (max-width:900px){.help{grid-template-columns:1fr}.helptoc{position:static;max-height:none}}
+.manual{font-size:15px;line-height:1.6}
+.manual h1{font-size:26px;margin:0 0 6px}.manual h2{font-size:20px;color:var(--text);text-transform:none;letter-spacing:0;font-weight:650;margin:30px 0 8px}
+.manual h3{font-size:16px;margin:22px 0 6px}.manual h4{font-size:14px;margin:16px 0 4px}
+.manual a{color:var(--accent)}.manual a.ext:after{content:" ↗";font-size:.85em}
+.manual blockquote{margin:12px 0;padding:8px 14px;border-left:3px solid var(--accent);background:var(--panel);border-radius:0 8px 8px 0}
+.manual blockquote p{margin:4px 0}
+.manual .tbl{overflow-x:auto;margin:10px 0}.manual table{width:100%;border-collapse:collapse;font-size:14px}
+.manual th,.manual td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.manual th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.3px}
+.manual code{font-family:ui-monospace,monospace;font-size:.9em;background:var(--panel2);padding:1px 5px;border-radius:4px}
+.manual hr{border:0;border-top:1px solid var(--line);margin:28px 0}
+.manual li{margin:3px 0}
+.flashh{background:color-mix(in srgb,var(--warn) 22%,transparent);border-radius:4px;transition:background .6s}
+.helplink{font-size:12px;color:var(--accent);margin-left:8px;cursor:pointer}
+.manual,.manual *,.helptoc,.helptoc *{font-feature-settings:normal;font-variant-numeric:normal}
+.manual th,.manual td{white-space:normal}

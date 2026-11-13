@@ -10,6 +10,10 @@ cash-secured puts, and share buys and sells. You make every trade decision; the 
 - **Window:** the app opens its own native window (pywebview + WebKitGTK). If that fails it falls back to
   Chromium, and to Firefox only after asking you.
 
+## Manual
+
+New to options? Read **[MANUAL.md](MANUAL.md)**: cash-secured puts, covered calls and the wheel, TQQQ's risks, and a walkthrough of every screen. The same manual is in the app's **Help** tab (works offline, key `6`), and each release has it attached as a PDF and plain text.
+
 ## Rules the app enforces
 
 - **Allowed trades:** covered calls and cash-secured puts only.

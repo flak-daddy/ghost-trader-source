@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import SYMBOL, __version__, config, csvout, db as dbm, events, marketcal, notify, perf, timeutil
+from . import SYMBOL, __version__, config, csvout, db as dbm, events, manual, marketcal, notify, perf, timeutil
 from .ledger import Ledger, TradeError, cents, money, strike_txt
 from .market import DemoProvider, Quotes, Rates, YahooProvider
 from .startup import Startup
@@ -839,6 +839,31 @@ class App:
         return {"ok": True, "path": str(path)}
 
     LINKS = {"av_key": "https://www.alphavantage.co/support/#api-key"}
+
+    def api_manual(self):
+        """The user manual as HTML plus a table of contents, for the Help tab (works offline)."""
+        try:
+            md = manual.load()
+        except OSError as e:
+            return {"error": f"Couldn't read the manual ({e})."}
+        body, toc = manual.render(md)
+        return {"html": body, "toc": toc, "version": __version__}
+
+    def api_open_manual_link(self, url):
+        """Open an outside link from the manual in the default browser. Only URLs written in the manual."""
+        url = str(url or "")
+        try:
+            known = url.startswith("https://") and f"]({url})" in manual.load()
+        except OSError:
+            known = False
+        if not known:
+            return {"error": "That link isn't in the manual."}
+        try:
+            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        except OSError as e:
+            return {"error": f"Couldn't open a browser ({e})."}
+        return {"ok": True}
 
     def api_open_link(self, name):
         url = self.LINKS.get(name)

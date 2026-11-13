@@ -52,7 +52,7 @@ function applyTheme() {
 matchMedia("(prefers-color-scheme: light)").addEventListener("change", applyTheme);
 
 /* ---------- header ---------- */
-const TABS = ["Portfolio", "Chain", "History", "Performance", "Settings"];
+const TABS = ["Portfolio", "Chain", "History", "Performance", "Settings", "Help"];
 function renderHeader() {
   const errs = st ? st.errors : 0;
   $("#tabs").innerHTML = TABS.map(t => `<button class="${ui.tab === t ? "on" : ""}" data-tab="${t}">${t}${t === "History" && errs ? `<span class=badge>${errs}</span>` : ""}</button>`).join("");
@@ -107,6 +107,7 @@ async function go(target) {
     if (b === "event") ui.hEvent = +c; }
   else if (a === "perf") { ui.tab = "Performance"; ui.perfDay = b; }
   else if (a === "report") { showReport(); return; }
+  else if (a === "help") { ui.tab = "Help"; ui.helpAt = b || null; }
   else if (a === "poshist") { ui.tab = "History"; ui.hFilter = hKeep.f; ui.hTag = hKeep.t; ui.hEvent = null;
     closeOverlay(); closeDrawer(); await render(); openPosPanel(+b); return; }
   closeOverlay(); closeDrawer(); await render(); scrollTo(0, 0);
@@ -127,7 +128,7 @@ document.addEventListener("keydown", e => {
   if (e.target.matches("input,select,textarea")) { if (e.key === "Escape") e.target.blur(); else return; }
   if ($("#splash").innerHTML) return;
   if (e.key === "Escape") { if ($("#overlay").innerHTML) closeOverlay(); else if ($("#drawer").innerHTML) { if (tk) cancelTicket(); else closeDrawer(); } else if (ui.pin != null) { ui.pin = null; render(); } else if (ui.lot) { ui.lot = null; render(); } }
-  if (/^[1-5]$/.test(e.key) && !$("#overlay").innerHTML && st.run) { ui.tab = TABS[+e.key - 1]; resetMarks(); closeDrawer(); render(); }
+  if (/^[1-6]$/.test(e.key) && !$("#overlay").innerHTML && st.run) { ui.tab = TABS[+e.key - 1]; resetMarks(); closeDrawer(); render(); }
   if (e.key === "Enter" && $("#confirmBtn") && !$("#confirmBtn").disabled) $("#confirmBtn").click();
 });
 
@@ -135,7 +136,7 @@ document.addEventListener("keydown", e => {
 async function refreshState() { const s = await api("state"); if (!s.error) st = s; return st; }
 async function render() {
   applyTheme(); renderHeader();
-  const fn = {Portfolio: renderPortfolio, Chain: renderChain, History: renderHistory, Performance: renderPerf, Settings: renderSettings}[ui.tab];
+  const fn = {Portfolio: renderPortfolio, Chain: renderChain, History: renderHistory, Performance: renderPerf, Settings: renderSettings, Help: renderHelp}[ui.tab];
   await fn();
   renderHeader();
 }
@@ -321,7 +322,7 @@ function renderTicket() {
   const priceBad = !c.ok && /price|bid|ask/.test(c.msg);
   document.body.classList.add("withDrawer");
   $("#drawer").innerHTML = `<div class=drawer>
-    <div style="display:flex;justify-content:space-between"><b style="font-size:15px">${titles[tk.action]}</b><button class="btn small" onclick="cancelTicket()">${tk.from ? "Back" : "Close"} <span class=kbd>Esc</span></button></div>
+    <div style="display:flex;justify-content:space-between"><span><b style="font-size:15px">${titles[tk.action]}</b>${helpFor(tk)}</span><button class="btn small" onclick="cancelTicket()">${tk.from ? "Back" : "Close"} <span class=kbd>Esc</span></button></div>
     <div class=meta>TQQQ ${f2(d.price)} · ${qtxt} <span class=lnk style="color:var(--accent)" id=tkRef>${I("refresh")} Refresh quote</span></div>
     ${isClose ? `<div style="margin:8px 0 2px;font-weight:600">${esc(st.positions.find(p => p.id === tk.position_id)?.label || "")}</div>` : ""}
     ${contract}
@@ -351,6 +352,42 @@ function renderTicket() {
   const n = $("#tkNote"); if (n) n.oninput = () => tk.note = n.value;
   const tg = $("#tkTag"); if (tg) tg.onkeydown = e => { if (e.key === "Enter" && tg.value.trim()) { let v = tg.value.trim().toLowerCase().replace(/\s+/g, "-"); if (!v.startsWith("#")) v = "#" + v; if (!tk.tags.includes(v)) tk.tags.push(v); renderTicket(); setTimeout(() => $("#tkTag") && $("#tkTag").focus(), 0); } };
   $("#reviewBtn").onclick = showConfirm;
+}
+
+function helpFor(t) {
+  const sec = t.action.endsWith("shares") ? null : t.type === "put" ? ["cash-secured-puts", "How cash-secured puts work"] : ["covered-calls-and-the-wheel", "How covered calls work"];
+  return sec ? ` <span class="lnk helplink" onclick="go('help:${sec[0]}')" data-tip="Open the manual at this section">${sec[1]} ↗</span>` : "";
+}
+
+/* ---------- HELP ---------- */
+let manualData = null;
+async function renderHelp() {
+  if (!manualData) { const m = await api("manual"); if (m.error) { $("#main").innerHTML = `<div class="alert e"><span class=ic>${I("alert")}</span><span>${esc(m.error)}</span></div>`; return; } manualData = m; }
+  const m = manualData;
+  const toc = m.toc.filter(t => t.id !== "contents").map(t => `<a class="t${t.level}" href="#${t.id}" data-h="${t.id}">${esc(t.text)}</a>`).join("");
+  $("#main").innerHTML = `<div class=help><nav class=helptoc><div class=meta style="margin-bottom:6px">MANUAL · v${esc(m.version)}</div>
+      <input id=helpQ placeholder="Find in the manual…" style="width:100%;margin-bottom:8px">${toc}</nav>
+    <article class=manual id=manual>${m.html}</article></div>`;
+  const art = $("#manual"), q = $("#helpQ");
+  const jump = id => { const t = document.getElementById(id); if (!t) return; const y = t.getBoundingClientRect().top + scrollY - $("header").offsetHeight - 10; scrollTo({top: y}); t.classList.add("flashh"); setTimeout(() => t.classList.remove("flashh"), 1400); };
+  $("#main").querySelectorAll("a[href]").forEach(a => a.onclick = e => {
+    const h = a.getAttribute("href"); e.preventDefault();
+    if (h.startsWith("#")) jump(h.slice(1));
+    else api("open_manual_link", {url: h}).then(r => r.error ? toast(esc(r.error)) : toast("Opened in your browser."));
+  });
+  q.onkeydown = e => {
+    if (e.key !== "Enter" || !q.value.trim()) return;
+    const needle = q.value.trim().toLowerCase(), els = [...art.querySelectorAll("h2,h3,h4,p,li,td")];
+    const start = (renderHelp.lastHit != null && renderHelp.lastQ === needle) ? renderHelp.lastHit + 1 : 0;
+    let k = els.findIndex((el, i) => i >= start && el.textContent.toLowerCase().includes(needle));
+    if (k < 0) k = els.findIndex(el => el.textContent.toLowerCase().includes(needle));
+    if (k < 0) { toast("Not found in the manual."); return; }
+    renderHelp.lastHit = k; renderHelp.lastQ = needle;
+    const el = els[k]; scrollTo({top: el.getBoundingClientRect().top + scrollY - $("header").offsetHeight - 40});
+    el.classList.add("flashh"); setTimeout(() => el.classList.remove("flashh"), 1400);
+  };
+  const at = ui.helpAt; ui.helpAt = null;
+  if (at) setTimeout(() => jump(at), 0); else scrollTo(0, 0);
 }
 
 /* ---------- POSITION DETAILS ---------- */
@@ -629,7 +666,7 @@ async function renderSettings() {
       <span class=pill style="text-align:center">Click</span><span>pin the details</span>
       <span class=pill style="text-align:center">Double-click</span><span>jump to the related place <span class=meta>(<span class=lnk>dotted underline</span>)</span></span></div></div>
     <div class=row><label>Font</label><span class=meta>Inter, bundled with the app · ${fontOk ? "loaded " + I("check") : "using backup font"}</span></div>
-    <div class=row><label>Shortcuts</label><span class=meta><span class=kbd>1</span>–<span class=kbd>5</span> tabs · <span class=kbd>Esc</span> close · <span class=kbd>Enter</span> confirm</span></div></div>
+    <div class=row><label>Shortcuts</label><span class=meta><span class=kbd>1</span>–<span class=kbd>6</span> tabs · <span class=kbd>Esc</span> close · <span class=kbd>Enter</span> confirm</span></div></div>
   <div class=card><h2 style="margin-top:0">Runs & app</h2>
     <div class=row><label>Current run</label><span>${s.run ? "Started " + esc(s.run.start) + " · " + mc(s.run.cash_c) : "none"}</span></div>
     <div class=row style="align-items:flex-start"><label>Past runs</label><span>${s.past.length ? s.past.map(r => `<div>${esc(r.start)} → ${esc(r.end)} · ${mc(r.final_c)} <button class="btn small" data-rexp="${r.id}">Save CSV…</button></div>`).join("") : `<span class=meta>none yet · closed runs' CSVs can be re-exported here</span>`}</span></div>
