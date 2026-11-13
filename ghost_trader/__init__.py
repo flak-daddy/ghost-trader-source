@@ -1,5 +1,5 @@
 """Ghost Trader: a local paper-trading ledger for covered calls and cash-secured puts."""
 
-__version__ = "1.8.0"
+__version__ = "1.8.1"
 APP_NAME = "Ghost Trader"
 SYMBOL = "TQQQ"

@@ -484,7 +484,11 @@ The ticket opens on the right. It shows:
 - **Quote:** bid, ask, mid, implied volatility and delta.
 - **Contracts and fill price.** The fill price starts at the mid when selling and halfway between the mid and the ask when buying. You can type any price from the bid to the ask.
 - **What happens:** premium in, collateral set aside (or shares locked), interest on the collateral to expiration, the return if it expires worthless, and your Available cash before and after.
-- **Chances** (when selling to open): three lines, each with a plain percentage. **Chance of expiring worthless** (TQQQ finishes on the keep-the-premium side of the strike), **chance of assignment** (or **of being called away** for a covered call; always 100% minus the first line), and **chance of profit at expiration** (TQQQ finishes on the profitable side of your breakeven, which for a put is the strike minus the premium, so profit can include being assigned). Hover any line for exactly what it means for that contract. These are estimates from the option's implied volatility, the same math that prices the option, not predictions. They assume the market's expected volatility is right and say nothing about direction.
+- **Chances** (when selling to open): three lines, each with a plain percentage. **Chance of expiring worthless** (TQQQ finishes on the keep-the-premium side of the strike), **chance of assignment** (or **of being called away** for a covered call; always 100% minus the first line), and **chance of profit at expiration** (TQQQ finishes on the profitable side of your breakeven, which for a put is the strike minus the premium, so profit can include being assigned). Hover any line for exactly what it means for that contract. These are estimates from the option's implied volatility, the same math that prices the option, not predictions. They assume the market's expected volatility is right and say nothing about direction. A line under them shows what they're based on: the IV, TQQQ's price, and the calendar days left.
+
+  Very unlikely or very likely outcomes show as **<1%** or **>99%**, never a flat 0% or 100%: a far out-of-the-money put with a week left really can be a fraction of a percent from assignment, but it's never impossible.
+
+  Yahoo sometimes reports a junk implied volatility, especially for far out-of-the-money or quiet contracts (near zero after hours, or thousands of percent). Anything under 5% or over 500% is treated as junk: Ghost Trader works the IV out from the option's own mid price instead and marks it **(from price)**. If the price can't explain it either, it borrows the nearest strike's IV and marks it **(nearest strike)**. The same repaired IV is used for the quote line's IV and the chain's delta.
 - **Note and tags:** write why you're making the trade and tag it (for example `#earnings-week`). You'll see notes and tags again in History.
 - **Compare:** a table of the same trade across other **dates** or other **strikes**, with return and annualized return. The best annualized return gets a star. Click a row to switch to it.
 - **Rule check:** a green line if the trade passes every rule, or a red line saying exactly what's wrong.
@@ -527,7 +531,7 @@ Double-click a position on Portfolio, or its gold dot in the Chain, to open its 
 - how far TQQQ is from the strike and the days left,
 - what happens if it expires worthless, and what happens if it's assigned or called away,
 - your note and tags,
-- **Chances now:** chance of expiring worthless, of assignment (or being called away), and of profit at expiration, from today's implied volatility and the days left, with **"was X%"** from when you opened it (for trades placed from v1.8.0 on). Hover a line for what it means.
+- **Chances now:** chance of expiring worthless, of assignment (or being called away), and of profit at expiration, from today's implied volatility and the days left (same <1%/>99% display and basis line as the ticket), with **"was X%"** from when you opened it (for trades placed from v1.8.0 on). Hover a line for what it means.
 - the market readings saved with each trade.
 
 Buttons: **Show in Portfolio** (Portfolio, with this position highlighted), **Sell more**, and **Close position…**.

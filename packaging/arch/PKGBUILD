@@ -3,7 +3,7 @@
 #   cd ghost-trader-source/packaging/arch && yay -Bi .
 # Update later:  cd ghost-trader-source && git pull && cd packaging/arch && yay -Bi .
 pkgname=ghost-trader
-pkgver=1.8.0
+pkgver=1.8.1
 pkgrel=1
 pkgdesc="Paper-trade TQQQ covered calls and cash-secured puts with real (delayed) quotes and strict rules"
 arch=('any')

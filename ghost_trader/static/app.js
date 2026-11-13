@@ -304,7 +304,7 @@ function renderTicket() {
     const kOpts = (d.strikes || [tk.strike]).map(K => `<option ${K === +tk.strike ? "selected" : ""} value="${K}">${K}</option>`).join("");
     contract = `<div class=row><label>Contract</label><span style="display:flex;gap:6px"><select id=tkExp ${isClose ? "disabled" : ""}>${expOpts}</select><select id=tkK ${isClose ? "disabled" : ""}>${kOpts}</select>
       <span class=seg><button class="btn small ${tk.type === "call" ? "on" : ""}" data-tt="call" ${isClose ? "disabled" : ""}>Call</button><button class="btn small ${tk.type === "put" ? "on" : ""}" data-tt="put" ${isClose ? "disabled" : ""}>Put</button></span></span></div>
-      <div class=meta style="text-align:right">Bid ${f2(q.bid)} · Ask ${f2(q.ask)} · Mid ${f2(q.mid)}${q.iv ? " · IV " + (q.iv * 100).toFixed(1) + "%" : ""}${q.delta != null ? " · Δ " + q.delta.toFixed(2) : ""}</div>
+      <div class=meta style="text-align:right">Bid ${f2(q.bid)} · Ask ${f2(q.ask)} · Mid ${f2(q.mid)}${q.iv ? " · IV " + (q.iv * 100).toFixed(1) + "%" + ivSrcShort(q.iv_src) : ""}${q.delta != null ? " · Δ " + q.delta.toFixed(2) : ""}</div>
       ${isClose ? "" : `<div class=row><label>Action</label><span class=seg><button class="btn small ${tk.action === "sell_to_open" ? "on" : ""}" data-sd="sell_to_open">Sell to open</button><button class="btn small ${tk.action === "buy_to_open" ? "on" : ""}" data-sd="buy_to_open">Buy to open</button></span></div>`}`;
     if (d.compare) { const cm = d.compare;
       const rowsH = cm.rows.map(r => { const sel = cm.mode === "dates" ? r.exp === tk.expiry : r.strike === +tk.strike;
@@ -370,9 +370,22 @@ function renderTicket() {
   $("#reviewBtn").onclick = showConfirm;
 }
 
+/* Chances as text: never a flat 0% or 100%, which reads as "certain" when it's only very unlikely / very likely. */
+function chPct(v) { return v == null ? "—" : v >= 0.995 ? ">99%" : v < 0.005 ? "<1%" : (v * 100).toFixed(0) + "%"; }
+const IV_SRC = {quote: "from Yahoo's quote", price: "worked out from the option's price (Yahoo's reading was implausible)",
+  nearby: "borrowed from the nearest strike (this contract's reading was implausible)"};
+function ivSrcShort(s) { return s === "price" ? " (from price)" : s === "nearby" ? " (nearest strike)" : ""; }
+function chBasis(c) {
+  const iv = (c.iv * 100).toFixed(0) + "%", src = IV_SRC[c.iv_src] || "from the quote";
+  const parts = [`IV ${iv}${ivSrcShort(c.iv_src)}`];
+  if (c.S != null) parts.push(`TQQQ $${f2(c.S)}`);
+  if (c.dte != null) parts.push(plural(Math.max(c.dte, 0), "day") + " left");
+  const tip = `Implied volatility ${iv}, ${src}: the market's own guess at how much TQQQ will move. The chances assume that guess is right and say nothing about direction. Days are calendar days.`;
+  return `<div class=meta style="text-align:right;font-size:11px" data-tip="${esc(tip)}">Using ${parts.join(" · ")} · estimates, not predictions</div>`;
+}
 function chancesRows(c, type) {
   if (!c) return "";
-  const k = kTxt(tk.strike), be = "$" + f2(c.breakeven), pc = v => `<b>${(v * 100).toFixed(0)}%</b>`;
+  const k = kTxt(tk.strike), be = "$" + f2(c.breakeven), pc = v => `<b>${chPct(v)}</b>`;
   const rows = type === "put" ? [
     ["Chance of expiring worthless", c.worthless, `% chance TQQQ closes above ${k} at expiration: the put expires and you keep the whole premium`],
     ["Chance of assignment", 1 - c.worthless, `% chance TQQQ closes below ${k} and you buy 100 shares per contract at ${k}`],
@@ -384,7 +397,7 @@ function chancesRows(c, type) {
   ];
   return `<div class=chances>
     ${rows.map(([lab, v, tip]) => `<div class=row data-tip="${esc(tip)}"><label>${lab}</label><span>${pc(v)}</span></div>`).join("")}
-    <div class=meta style="text-align:right;font-size:11px" data-tip="From the option's implied volatility (${(c.iv * 100).toFixed(0)}%), the market's own guess at how much TQQQ will move. They assume that guess is right and say nothing about direction.">Estimates from implied volatility, not predictions · hover a line for what it means</div></div>`;
+    ${chBasis(c)}</div>`;
 }
 function helpFor(t) {
   const sec = t.action.endsWith("shares") ? null : t.type === "put" ? ["cash-secured-puts", "How cash-secured puts work"] : ["covered-calls-and-the-wheel", "How covered calls work"];
@@ -645,7 +658,7 @@ const hasReadings = r => r && ["stoch14_k", "stoch30_k", "stoch60_k", "stoch180_
 function posChances(p) {
   const c = p.chances, o = p.chances_open;
   if (!c) return "";
-  const k = kTxt(p.strike), be = "$" + f2(c.breakeven), was = v => v == null ? "" : ` <span class=meta>· was ${(v * 100).toFixed(0)}%</span>`;
+  const k = kTxt(p.strike), be = "$" + f2(c.breakeven), was = v => v == null ? "" : ` <span class=meta>· was ${chPct(v)}</span>`;
   const rows = p.type === "put" ? [
     ["Chance of expiring worthless", c.worthless, o && o.worthless, `% chance TQQQ closes above ${k} at expiration: the put expires and you keep the whole premium`],
     ["Chance of assignment", 1 - c.worthless, o && 1 - o.worthless, `% chance TQQQ closes below ${k} and you buy 100 shares per contract at ${k}`],
@@ -656,8 +669,8 @@ function posChances(p) {
     ["Chance of profit at expiration", c.profit, o && o.profit, `% chance TQQQ closes below ${be} (${k} strike + premium), where the premium outweighs what selling at ${k} gives up`],
   ];
   return `<div class=meta style="margin:14px 0 4px">CHANCES NOW${o ? ` <span style="opacity:.8">· and when you opened it</span>` : ""}</div>
-    <table class=mini><tbody>${rows.map(([lab, v, w, tip]) => `<tr data-tip="${esc(tip)}"><td class=l>${lab}</td><td><b>${(v * 100).toFixed(0)}%</b>${o ? was(w) : ""}</td></tr>`).join("")}</tbody></table>
-    <div class=meta style="text-align:right;font-size:11px">From today's implied volatility and days left · estimates, not predictions · hover a line for what it means</div>`;
+    <table class=mini><tbody>${rows.map(([lab, v, w, tip]) => `<tr data-tip="${esc(tip)}"><td class=l>${lab}</td><td><b>${chPct(v)}</b>${o ? was(w) : ""}</td></tr>`).join("")}</tbody></table>
+    ${chBasis(c)}`;
 }
 function readingsLine(r, day) {
   if (!hasReadings(r)) return "";

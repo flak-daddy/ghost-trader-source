@@ -284,7 +284,7 @@ class App:
         return round((q["mid"] + q["ask"]) / 2 + 1e-9, 2)
 
     @staticmethod
-    def _chances(type_, S, K, px, dte, iv, rate):
+    def _chances(type_, S, K, px, dte, iv, rate, iv_src=None):
         """Chance of profit at expiration and chance the short option expires worthless, from implied volatility
         (lognormal, risk-neutral). Estimates, not predictions. None when there isn't enough to go on."""
         if not (S and K and iv and iv > 0) or dte is None or dte < 0:
@@ -292,14 +292,15 @@ class App:
         T = max(dte, 0.5) / 365
         r = (rate or 0) / 100
         sd = iv * math.sqrt(T)
+        info = {"iv": iv, "iv_src": iv_src, "S": round(S, 2), "dte": dte}
 
         def above(x):  # P(S_T > x)
             return ncdf((math.log(S / x) + (r - iv * iv / 2) * T) / sd) if x > 0 else 1.0
         if type_ == "put":
             be = K - px
-            return {"profit": above(be), "worthless": above(K), "breakeven": round(be, 2), "iv": iv}
+            return {"profit": above(be), "worthless": above(K), "breakeven": round(be, 2), **info}
         be = K + px
-        return {"profit": 1 - above(be), "worthless": 1 - above(K), "breakeven": round(be, 2), "iv": iv}
+        return {"profit": 1 - above(be), "worthless": 1 - above(K), "breakeven": round(be, 2), **info}
 
     def api_ticket(self, order, fresh=False):
         """Quote + rule check + effects + compare tables for the ticket side panel."""
@@ -339,7 +340,7 @@ class App:
             base = coll if coll else (S or 0) * 100 * qty
             ret = (prem + intr) / base if base else 0
             out.update(interest_c=cents(intr), ret=ret, ann=ret * 365 / max(dte, 1))
-            out["chances"] = self._chances(o["type"], S, k, px, dte, (q or {}).get("iv"), rate)
+            out["chances"] = self._chances(o["type"], S, k, px, dte, (q or {}).get("iv"), rate, (q or {}).get("iv_src"))
         # strikes available (with a bid) for this expiry/type, and the expiration list
         try:
             c = self.quotes.chain(o["expiry"])
@@ -445,7 +446,7 @@ class App:
             try:
                 dte = (dt.date.fromisoformat(o["expiry"]) - timeutil.today_ct()).days
                 ch = self._chances(o["type"], self.price(), float(o["strike"]), float(o["price"]), dte, q.get("iv"),
-                                   self.rates.for_day(timeutil.today_ct()))
+                                   self.rates.for_day(timeutil.today_ct()), q.get("iv_src"))
                 extra = {"chances": ch} if ch else None
             except Exception:  # noqa: BLE001
                 log.exception("chances at open")
@@ -536,7 +537,7 @@ class App:
         prem = cents(p["open_price"]) * 100 * p["open_qty"]
         ch_now = ch_open = ret = ann = days = None
         if p["side"] == "short":
-            ch_now = self._chances(p["type"], S, p["strike"], p["open_price"], dte, (q or {}).get("iv"), rate)
+            ch_now = self._chances(p["type"], S, p["strike"], p["open_price"], dte, (q or {}).get("iv"), rate, (q or {}).get("iv_src"))
             first = self.db.one("SELECT r.data FROM events e JOIN trade_readings r ON r.event_id=e.id WHERE "
                                 "e.position_id=? AND e.kind='Trade' ORDER BY e.ts, e.id LIMIT 1", (p["id"],))
             ch_open = json.loads(first[0]).get("chances") if first else None

@@ -37,6 +37,49 @@ def bs(S, K, T, r, sigma, call):
     return K * math.exp(-r * T) * ncdf(-d2) - S * ncdf(-d1), ncdf(d1) - 1.0
 
 
+IV_MIN, IV_MAX = 0.05, 5.0  # outside this range Yahoo's impliedVolatility is junk, not a real reading
+
+
+def iv_ok(iv):
+    return iv is not None and IV_MIN <= iv <= IV_MAX
+
+
+def implied_vol(price, S, K, T, r, call):
+    """Volatility that makes Black-Scholes match `price` (bisection). None when the price can't be explained
+    by any sensible volatility (below intrinsic value, or no time/price to work with)."""
+    if not (price and price > 0 and S and S > 0 and K and T and T > 0):
+        return None
+    lo, hi = 0.01, IV_MAX * 2
+    if price <= bs(S, K, T, r, lo, call)[0] or price >= bs(S, K, T, r, hi, call)[0]:
+        return None
+    for _ in range(80):
+        m = (lo + hi) / 2
+        if bs(S, K, T, r, m, call)[0] < price:
+            lo = m
+        else:
+            hi = m
+    return round((lo + hi) / 2, 4)
+
+
+def fix_ivs(rows, S, T, r):
+    """Yahoo's impliedVolatility is often junk on far out-of-the-money or quiet contracts (0.00001 after hours,
+    or thousands of percent). Keep sensible readings (iv_src 'quote'); otherwise work the IV out from the
+    option's mid price ('price'); failing that, borrow the nearest strike's of the same type ('nearby');
+    failing that, None."""
+    for x in rows:
+        if iv_ok(x.get("iv")):
+            x["iv_src"] = "quote"
+            continue
+        v = implied_vol(x.get("mid"), S, x["strike"], T, r, x["type"] == "call") if (S and T > 0) else None
+        x["iv"], x["iv_src"] = (v, "price") if iv_ok(v) else (None, None)
+    for x in rows:
+        if x["iv"] is None:
+            near = [y for y in rows if y["type"] == x["type"] and y.get("iv_src") in ("quote", "price")]
+            if near:
+                n = min(near, key=lambda y: abs(y["strike"] - x["strike"]))
+                x["iv"], x["iv_src"] = n["iv"], "nearby"
+
+
 def year_frac(expiry, now=None):
     now = now or timeutil.now()
     close = dt.datetime.combine(expiry, marketcal.close_time_et(expiry), timeutil.ET)
@@ -235,7 +278,9 @@ class DemoProvider:
                 bid = max(0.0, round(px - spread / 2, 2))
                 ask = round(px + spread / 2, 2) if px > 0.005 else (0.01 if px > 0.0005 else 0.0)
                 vol = int(4000 * math.exp(-abs(m) * 9) * (1.4 if typ == "put" else 1.0)) if bid > 0 else 0
-                rows.append({"type": typ, "strike": K, "bid": bid, "ask": ask, "last": round(px, 2), "iv": round(iv, 4),
+                # Like Yahoo: far out-of-the-money puts often report a junk IV (exercises the repair in fix_ivs).
+                rep = 0.00001 if (typ == "put" and K < S * 0.8) else round(iv, 4)
+                rows.append({"type": typ, "strike": K, "bid": bid, "ask": ask, "last": round(px, 2), "iv": rep,
                              "volume": vol, "oi": 0})
         return rows
 
@@ -506,6 +551,8 @@ class Quotes:
         T = year_frac(dt.date.fromisoformat(expiry))
         for x in rows:
             x["mid"] = mid_of(x["bid"], x["ask"], x.get("last")) or 0.0
+        fix_ivs(rows, S, T, r)
+        for x in rows:
             iv = x.get("iv")
             x["delta"] = round(bs(S, x["strike"], T, r, iv, x["type"] == "call")[1], 2) if (S and iv) else None
 
