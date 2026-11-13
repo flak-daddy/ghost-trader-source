@@ -227,19 +227,21 @@ async function renderChain() {
   const atm = ks.reduce((a, r) => Math.abs(r.k - Sx) < Math.abs(a - Sx) ? r.k : a, ks.length ? ks[0].k : 0);
   const itm = (t, k) => t === "call" ? k < Sx : k > Sx, ic = (t, k) => itm(t, k) ? " itm" : "";
   const d2 = v => v == null ? "—" : v.toFixed(2);
-  const cell = (q, t, k, side) => { if (!hasBid(q)) { const m = `<td class="meta${ic(t, k)}">`, n = [`${m}no bid</td>`, `${m}—</td>`, `${m}—</td>`, `${m}—</td>`]; return side === "c" ? n.reverse().join("") : n.join(""); }
+  const vol = v => v == null ? "—" : v >= 10000 ? (v / 1000).toFixed(0) + "k" : v >= 1000 ? (v / 1000).toFixed(1) + "k" : String(v);
+  const cell = (q, t, k, side) => { if (!hasBid(q)) { const m = `<td class="meta${ic(t, k)}">`, n = [`${m}no bid</td>`, `${m}—</td>`, `${m}—</td>`, `${m}—</td>`, `${m}—</td>`]; return side === "c" ? n.reverse().join("") : n.join(""); }
     const pc = `<td class="px${ic(t, k)}" data-k="${k}" data-t="${t}">`, cc = [`${pc}${f2(q.bid)}</td>`, `${pc}${f2(q.ask)}</td>`, `${pc}<b>${f2(q.mid)}</b></td>`];
-    const d = `<td class="meta${ic(t, k)}">${d2(q.delta)}</td>`; return side === "c" ? d + cc.join("") : cc.reverse().join("") + d; };
-  const head = view === "both" ? `<tr><th colspan=4>CALLS</th><th class=mid></th><th colspan=4>PUTS</th></tr><tr><th>Delta</th><th>Bid</th><th>Ask</th><th>Mid</th><th class=mid>Strike</th><th>Mid</th><th>Ask</th><th>Bid</th><th>Delta</th></tr>`
-    : `<tr><th class=mid>Strike</th><th>Bid</th><th>Ask</th><th>Mid</th><th>Delta</th></tr>`;
+    const d = `<td class="meta${ic(t, k)}">${d2(q.delta)}</td>`, v = `<td class="meta${ic(t, k)}">${vol(q.volume)}</td>`;
+    return side === "c" ? v + d + cc.join("") : cc.reverse().join("") + d + v; };
+  const head = view === "both" ? `<tr><th colspan=5>CALLS</th><th class=mid></th><th colspan=5>PUTS</th></tr><tr><th>Vol</th><th>Delta</th><th>Bid</th><th>Ask</th><th>Mid</th><th class=mid>Strike</th><th>Mid</th><th>Ask</th><th>Bid</th><th>Delta</th><th>Vol</th></tr>`
+    : `<tr><th class=mid>Strike</th><th>Bid</th><th>Ask</th><th>Mid</th><th>Delta</th><th>Vol</th></tr>`;
   const rows = ks.map(r => { const K = r.k, hs = held[K] || [];
     const dot = hs.length ? `<span class=held data-go="pos:${hs[0].id}" data-tip="Double-click: go to your ${esc(hs[0].exp_label)} ${kTxt(K)} ${hs[0].type === "put" ? "Put" : "Call"} (${plural(hs[0].open_qty, "contract")})">●</span>` : "";
     const cls = ui.flashStrike === K ? "flash" : "";
     if (view === "both") return `<tr class="${cls}" id="k${K}">${cell(r.call, "call", K, "c")}<td class=mid>${K}${dot}</td>${cell(r.put, "put", K, "p")}</tr>`;
     const t = view === "calls" ? "call" : "put", q = r[t];
-    return `<tr class="${cls}" id="k${K}"><td class=mid>${K}${dot}</td><td class="px${ic(t, K)}" data-k="${K}" data-t="${t}">${f2(q.bid)}</td><td class="px${ic(t, K)}" data-k="${K}" data-t="${t}">${f2(q.ask)}</td><td class="px${ic(t, K)}" data-k="${K}" data-t="${t}"><b>${f2(q.mid)}</b></td><td class="meta${ic(t, K)}">${d2(q.delta)}</td></tr>`; });
+    return `<tr class="${cls}" id="k${K}"><td class=mid>${K}${dot}</td><td class="px${ic(t, K)}" data-k="${K}" data-t="${t}">${f2(q.bid)}</td><td class="px${ic(t, K)}" data-k="${K}" data-t="${t}">${f2(q.ask)}</td><td class="px${ic(t, K)}" data-k="${K}" data-t="${t}"><b>${f2(q.mid)}</b></td><td class="meta${ic(t, K)}">${d2(q.delta)}</td><td class="meta${ic(t, K)}">${vol(q.volume)}</td></tr>`; });
   const cut = ks.findIndex(r => r.k > Sx);
-  const pline = `<tr class=pline>${view === "both" ? `<td colspan=4></td><td class=mid><span>TQQQ ${f2(Sx)}</span></td><td colspan=4></td>` : `<td><span>TQQQ ${f2(Sx)}</span></td><td colspan=4></td>`}</tr>`;
+  const pline = `<tr class=pline>${view === "both" ? `<td colspan=5></td><td class=mid><span>TQQQ ${f2(Sx)}</span></td><td colspan=5></td>` : `<td><span>TQQQ ${f2(Sx)}</span></td><td colspan=5></td>`}</tr>`;
   if (cut >= 0) rows.splice(cut, 0, pline); else rows.push(pline);
   const opts = c.groups.map(([g, list]) => `<optgroup label="${g}">${list.map(x => `<option value="${x.exp}" ${x.exp === e ? "selected" : ""}>${esc(x.label)} · ${x.dte} days</option>`).join("")}</optgroup>`).join("");
   const chg = c.prev_close ? Sx - c.prev_close : null;
@@ -250,7 +252,7 @@ async function renderChain() {
     <button class="btn small" style="margin-left:auto" id=chainRef title="Fetch this chain again">${I("refresh")} Refresh</button></div>
     ${c.error ? `<div class="alert w"><span class=ic>${I("warn")}</span><span>Couldn't refresh this chain (${esc(c.error)}); showing the last good quotes.</span></div>` : ""}
     <div class=bar><span class=big>TQQQ ${f2(Sx)}</span>${chg == null ? "" : `<span class="${chg >= 0 ? "up" : "down"}">${chg >= 0 ? "+" : "−"}${Math.abs(chg).toFixed(2)} (${chg >= 0 ? "+" : "−"}${Math.abs(chg / c.prev_close * 100).toFixed(2)}%)</span>`}<span class=meta>· <span class=itmkey></span> in the money · <span class=warn>●</span> = you hold this strike · click any price to open a ticket</span></div>
-    <div class=chainbox id=chainbox><table class=both><thead>${head}</thead><tbody>${rows.join("") || `<tr><td colspan=9 class=empty>No strikes with a bid for this expiration.</td></tr>`}</tbody></table></div>`;
+    <div class=chainbox id=chainbox><table class=both><thead>${head}</thead><tbody>${rows.join("") || `<tr><td colspan=11 class=empty>No strikes with a bid for this expiration.</td></tr>`}</tbody></table></div>`;
   $("#expSel").onchange = ev => { ui.chainExp = ev.target.value; ui.flashStrike = null; render(); };
   $$("[data-view]").forEach(b => b.onclick = () => { ui.chainView = b.dataset.view; render(); });
   $("#chainRef").onclick = async () => { await api("refresh_quote", {expiry: e, type: "put", strike: atm}); render(); };
@@ -312,10 +314,10 @@ function renderTicket() {
   if (tk.action === "sell_to_open" && tk.type === "put") effects = `<div class=row><label>Premium → Available now</label><span class=up>${mc(ef.premium_c || 0, true)}</span></div>
       <div class=row><label>Collateral set aside</label><span>${mc(ef.collateral_c || 0)}</span></div>
       <div class=row><label>Interest on collateral to expiry @ ${f2(d.rate)}%</label><span class=up>${mc(d.interest_c || 0, true)}</span></div>
-      <div class=row><label>Return if it expires worthless</label><span><b>${pct(d.ret, 2)}</b> · ${pct(d.ann)} annualized</span></div>`;
+      <div class=row data-tip="${pct(d.ret, 2)} over ${plural(d.dte, "day")} (premium + interest on the collateral, against the collateral) ≈ ${pct(d.ann)} a year if repeated back-to-back for a year. A comparison yardstick, not a forecast."><label>Return if it expires worthless</label><span><b>${pct(d.ret, 2)}</b></span></div>${chancesRows(d.chances, tk.type)}`;
   else if (tk.action === "sell_to_open") effects = `<div class=row><label>Premium → Available now</label><span class=up>${mc(ef.premium_c || 0, true)}</span></div>
       <div class=row><label>Shares locked as cover</label><span>${(tk.qty || 0) * 100}</span></div>
-      <div class=row><label>Return if it expires worthless</label><span><b>${pct(d.ret, 2)}</b> · ${pct(d.ann)} annualized</span></div>`;
+      <div class=row data-tip="${pct(d.ret, 2)} over ${plural(d.dte, "day")} (premium against the value of the 100 shares per contract covering it) ≈ ${pct(d.ann)} a year if repeated back-to-back for a year. A comparison yardstick, not a forecast."><label>Return if it expires worthless</label><span><b>${pct(d.ret, 2)}</b></span></div>${chancesRows(d.chances, tk.type)}`;
   else if (tk.action === "buy_to_close") effects = `<div class=row><label>Cost out${tk.type === "put" ? " (from this position's collateral)" : ""}</label><span class=down>${mc(-(ef.cost_c || 0))}</span></div>
       ${tk.type === "put" ? `<div class=row><label>Collateral released</label><span>${mc((ef.collateral_released_c || 0) - (ef.cost_c || 0))}</span></div>` : `<div class=row><label>Shares unlocked</label><span>${(tk.qty || 0) * 100}</span></div>`}
       ${ef.result_c != null ? `<div class=row><label>Result on these contracts</label><span class="${ef.result_c >= 0 ? "up" : "down"}">${mc(ef.result_c, true)}</span></div>` : ""}`;
@@ -357,9 +359,39 @@ function renderTicket() {
   $("#reviewBtn").onclick = showConfirm;
 }
 
+function chancesRows(c, type) {
+  if (!c) return "";
+  const k = kTxt(tk.strike), be = "$" + f2(c.breakeven), pc = v => `<b>${(v * 100).toFixed(0)}%</b>`;
+  const rows = type === "put" ? [
+    ["Chance of expiring worthless", c.worthless, `% chance TQQQ closes above ${k} at expiration: the put expires and you keep the whole premium`],
+    ["Chance of assignment", 1 - c.worthless, `% chance TQQQ closes below ${k} and you buy 100 shares per contract at ${k}`],
+    ["Chance of profit at expiration", c.profit, `% chance TQQQ closes above ${be}, the breakeven (${k} strike − premium): either expiring worthless, or assigned with the drop smaller than the premium`],
+  ] : [
+    ["Chance of expiring worthless", c.worthless, `% chance TQQQ closes below ${k} at expiration: the call expires, your shares stay, you keep the whole premium`],
+    ["Chance of being called away", 1 - c.worthless, `% chance TQQQ closes above ${k} and your 100 shares per contract are sold at ${k}`],
+    ["Chance of profit at expiration", c.profit, `% chance TQQQ closes below ${be} (${k} strike + premium), where the premium outweighs what selling at ${k} gives up`],
+  ];
+  return `<div class=chances>
+    ${rows.map(([lab, v, tip]) => `<div class=row data-tip="${esc(tip)}"><label>${lab}</label><span>${pc(v)}</span></div>`).join("")}
+    <div class=meta style="text-align:right;font-size:11px" data-tip="From the option's implied volatility (${(c.iv * 100).toFixed(0)}%), the market's own guess at how much TQQQ will move. They assume that guess is right and say nothing about direction.">Estimates from implied volatility, not predictions · hover a line for what it means</div></div>`;
+}
 function helpFor(t) {
   const sec = t.action.endsWith("shares") ? null : t.type === "put" ? ["cash-secured-puts", "How cash-secured puts work"] : ["covered-calls-and-the-wheel", "How covered calls work"];
   return sec ? ` <span class="lnk helplink" onclick="go('help:${sec[0]}')" data-tip="Open the manual at this section">${sec[1]} ↗</span>` : "";
+}
+
+/* ---------- AUTO-REFRESH (market hours) ---------- */
+let autoT = null;
+function setAutoRefresh() {
+  clearInterval(autoT); autoT = null;
+  const m = ui.autoMin ?? 10; if (!m) return;
+  autoT = setInterval(async () => {
+    if (!st || !st.run || !st.market || !st.market.open) return;
+    const r = await api("refresh_open"); if (r.closed) return;
+    await refreshState(); indData = null;
+    const busy = $("#overlay").innerHTML || $("#drawer").innerHTML || document.activeElement.matches("input,select,textarea");
+    if (busy || ui.tab === "Settings" || ui.tab === "Help") renderHeader(); else render();
+  }, m * 60000);
 }
 
 /* ---------- INDICATORS ---------- */
@@ -693,7 +725,8 @@ async function renderPerf() {
     <div class=card><small>vs. benchmarks</small><span class=big>${sm.bh_ret == null ? "—" : ((sm.ret - sm.bh_ret) * 100 >= 0 ? "+" : "") + ((sm.ret - sm.bh_ret) * 100).toFixed(2)} / ${((sm.ret - sm.tb_ret) * 100 >= 0 ? "+" : "") + ((sm.ret - sm.tb_ret) * 100).toFixed(2)} pts</span><div class=meta>vs. TQQQ / vs. T-bills</div></div></div>`;
   const bars = monthBars(p);
   if (N < 2) {
-    $("#main").innerHTML = `${cardsH}<div style="display:flex;gap:16px;flex-wrap:wrap"><div class=card style="flex:1;min-width:0"><b>Account value</b><div class=empty>The charts fill in as days go by: one point for each day the app is opened (missed days are estimated from TQQQ's daily closes).</div></div>${bars}</div>`;
+    $("#main").innerHTML = `${cardsH}<div style="display:flex;gap:16px;flex-wrap:wrap"><div class=card style="flex:1;min-width:0"><b>Account value</b><div class=empty>The charts fill in as days go by: one point for each day the app is opened (missed days are estimated from TQQQ's daily closes).</div></div>${bars}</div><div id=outcomes></div>`;
+    renderOutcomes();
     return;
   }
   const {acct, bh, tb, tqqq: tq, est} = p;
@@ -743,7 +776,8 @@ async function renderPerf() {
       <div style="display:flex;justify-content:space-between"><b>Account value since ${esc(p.labels[0])}</b><span class=seg><button class="btn small ${ui.chartTable ? "" : "on"}" id=asChart>Chart</button><button class="btn small ${ui.chartTable ? "on" : ""}" id=asTable>Table</button></span></div>
       <div class=meta style="margin:2px 0 6px"><span style="color:var(--s1)">${I("dot")}</span> Ghost Trader &nbsp; <span style="color:var(--s2)">${I("dot")}</span> TQQQ buy & hold &nbsp; <span style="color:var(--s3)">${I("dot")}</span> T-bills &nbsp; ${I("ring")} estimated day &nbsp; <span style="color:var(--warn)">${I("diamond")}</span> share in/out</div>
       ${ui.chartTable ? table : `${svg1}<div style="border-top:1px solid var(--line);margin-top:6px;padding-top:8px"><b>TQQQ price since ${esc(p.labels[0])}</b> <span class=meta>· hover either chart · click a <span style="color:var(--warn)">${I("diamond")}</span> to pin, double-click to open in History</span></div><div class=chartwrap>${svg2}${pin}</div>`}</div>
-      ${bars}</div>`;
+      ${bars}</div><div id=outcomes></div>`;
+  renderOutcomes();
   $("#asChart").onclick = () => { ui.chartTable = false; render(); };
   $("#asTable").onclick = () => { ui.chartTable = true; render(); };
   if ($("#clrBand")) $("#clrBand").onclick = () => { ui.perfDay = null; render(); };
@@ -765,6 +799,18 @@ async function renderPerf() {
     svg.addEventListener("mouseleave", clear); });
   $$(".mk").forEach(m => m.addEventListener("click", e => { e.stopPropagation(); clearTimeout(pinT); if (e.detail === 1) pinT = setTimeout(() => { if (ui.tab === "Performance") { ui.pin = +m.dataset.j; render(); } }, 260); }));
 }
+async function renderOutcomes() {
+  const o = await api("outcomes", {by: ui.outBy || "stoch14"}), el = $("#outcomes");
+  if (!el || o.error) return;
+  const tabs = `<div class=stabs role=tablist>${o.options.map(([k, t]) => `<button role=tab class="${k === o.by ? "on" : ""}" data-ob="${k}">${t}</button>`).join("")}</div>`;
+  const pc = v => v == null ? "—" : (v * 100).toFixed(0) + "%";
+  const rows = o.groups.map(g => `<tr class="${g.n ? "" : "dim"}"><td class=l>${esc(g.label)}</td><td>${g.n}</td><td>${pc(g.win_rate)}</td><td>${pc(g.kept)}</td><td>${g.n ? g.expired : "—"}</td><td>${g.n ? g.assigned : "—"}</td><td class="${g.avg_result_c > 0 ? "up" : g.avg_result_c < 0 ? "down" : ""}">${g.avg_result_c == null ? "—" : mc(g.avg_result_c, true)}</td></tr>`).join("");
+  el.innerHTML = `<h2>Readings at entry vs. outcomes</h2><div class="stochpanel" style="margin-top:0">${tabs}
+    ${o.total ? `<table class=outt><thead><tr><th class=l>When opened, ${esc(o.options.find(x => x[0] === o.by)[1])} was</th><th>Trades</th><th>Win rate</th><th>Avg % of premium kept</th><th>Expired worthless</th><th>Assigned / called</th><th>Avg result</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class=meta style="padding:6px 12px 8px">Finished short options this run with readings saved when opened (${o.total}${o.without ? `; ${o.without} had no reading for this one` : ""}). A win is a positive result; assigned puts count the shares at that day's close. Small groups say little.</div>`
+    : `<div class=empty style="padding:18px 12px">Nothing to compare yet. Trades placed from v1.6.0 on save their readings; once they finish (expire, get assigned or are closed) they're grouped here.</div>`}</div>`;
+  $$("[data-ob]").forEach(b => b.onclick = () => { ui.outBy = b.dataset.ob; renderOutcomes(); });
+}
 function monthBars(p) {
   const ms = p.monthly.slice(-6);
   const BW = Math.max(360, 70 + ms.length * 140), BH = 250;
@@ -785,6 +831,31 @@ function monthBars(p) {
 }
 
 /* ---------- SETTINGS ---------- */
+function renderAlertRules(a, save) {
+  const el = $("#alertRules"); if (!el) return;
+  let rules = a.rules.map(r => ({...r}));
+  const now = a.now || {};
+  const opt = (m) => Object.entries(a.metrics).map(([k, t]) => `<option value="${k}" ${k === m ? "selected" : ""}>${esc(t)}</option>`).join("");
+  const draw = () => {
+    el.innerHTML = (rules.length ? rules.map((r, i) => { const v = now[r.metric], hit = v != null && (r.op === "below" ? v < r.value : v > r.value);
+      return `<div class=arule><input type=checkbox data-aon=${i} ${r.on ? "checked" : ""} title="On/off">
+        <select data-am=${i}>${opt(r.metric)}</select>
+        <select data-ao=${i}><option ${r.op === "below" ? "selected" : ""}>below</option><option ${r.op === "above" ? "selected" : ""}>above</option></select>
+        <input data-av=${i} value="${r.value}" style="width:56px">
+        <span class=meta style="min-width:70px">now ${v == null ? "—" : (r.metric === "vix" ? f2(v) : Math.round(v))}${hit ? ` <span class=warn>${I("dot")}</span>` : ""}</span>
+        <button class="btn small" data-adel=${i} title="Remove">${I("x")}</button></div>`; }).join("") : `<div class=meta>No alerts yet.</div>`)
+      + `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" id=aAdd>+ Add alert</button>${rules.length ? "" : `<button class="btn small" id=aPre>Add suggested (stoch &lt; 20, stoch &gt; 80, F&amp;G &lt; 25, VIX &gt; 30)</button>`}</div>`;
+    const put = async () => { await save({ind_alerts: rules}); };
+    $$("[data-aon]").forEach(x => x.onchange = () => { rules[+x.dataset.aon].on = x.checked; put(); });
+    $$("[data-am]").forEach(x => x.onchange = () => { rules[+x.dataset.am].metric = x.value; rules[+x.dataset.am].id = null; put(); draw(); });
+    $$("[data-ao]").forEach(x => x.onchange = () => { rules[+x.dataset.ao].op = x.value; rules[+x.dataset.ao].id = null; put(); draw(); });
+    $$("[data-av]").forEach(x => x.onchange = () => { const v = parseFloat(x.value); if (isNaN(v)) { toast("Enter a number."); return; } rules[+x.dataset.av].value = v; rules[+x.dataset.av].id = null; put(); draw(); });
+    $$("[data-adel]").forEach(x => x.onclick = () => { rules.splice(+x.dataset.adel, 1); put(); draw(); });
+    $("#aAdd").onclick = () => { rules.push({metric: "stoch14_k", op: "below", value: 20, on: true}); put(); draw(); };
+    if ($("#aPre")) $("#aPre").onclick = () => { rules = a.presets.map(p => ({...p, on: true})); put(); draw(); };
+  };
+  draw();
+}
 async function renderSettings() {
   const s = await api("settings"), cfg = s.settings;
   const fontOk = document.fonts.check('14px "GT Inter"');
@@ -800,7 +871,13 @@ async function renderSettings() {
     <div class=row><label>Haircut below T-bill rate</label><input id=hc value="${f2(cfg.haircut || 0)}%" style="width:90px"></div>
     <div class=row><label>Interest</label><span class=meta>all cash · accrues daily · paid on the 15th (prior business day if closed)</span></div>
     <div class=row><label>Quotes</label><span class=meta>${esc(s.provider)}</span></div>
+    <div class=row><label>Auto-refresh</label><span><span class=seg>${[[0, "Off"], [5, "5 min"], [10, "10 min"], [15, "15 min"]].map(([v, t]) => `<button class="btn small ${(cfg.auto_refresh ?? 10) === v ? "on" : ""}" data-ar="${v}">${t}</button>`).join("")}</span> <span class=meta>while the market is open</span></span></div>
     <div class=row><label>Expiration-day alerts</label><span class=meta>${s.nudges.installed ? (s.nudges.active === false ? "<span class=warn>timer installed but not running</span>" : "desktop notification " + esc(s.nudges.time)) : "not set up yet (starts after the next launch)"}${!s.nudges.notify_send ? " · <span class=warn>needs libnotify</span>" : !s.nudges.daemon ? " · <span class=warn>no notification daemon running</span>" : ""} <button class="btn small" id=testNotify>Send test</button></span></div></div>
+  <div class=card><h2 style="margin-top:0">Notifications</h2>
+    <div class=row><label>End-of-day summary</label><span><span class=seg><button class="btn small ${cfg.eod_summary === false ? "on" : ""}" data-eod=0>Off</button><button class="btn small ${cfg.eod_summary === false ? "" : "on"}" data-eod=1>On</button></span> <button class="btn small" id=testEod>Send now</button></span></div>
+    <div class=row><label></label><span class=meta>3:30 PM CT on trading days: the day's change, premium, interest, and what expires next</span></div>
+    <div class=row style="align-items:flex-start"><label>Indicator alerts</label><div id=alertRules style="flex:1"></div></div>
+    <div class=row><label></label><span class=meta>A notification when a reading crosses your level (once per crossing). Checked when the indicators refresh and at 7:45 AM / 3:30 PM CT.</span></div></div>
   <div class=card><h2 style="margin-top:0">Trading</h2>
     <div class=row><label>Allow buying options to open</label><span class=seg><button class="btn small ${cfg.long_options ? "" : "on"}" data-lo=0>Off</button><button class="btn small ${cfg.long_options ? "on" : ""}" data-lo=1>On</button></span></div>
     <div class=row><label>Fill price default</label><span class=meta>mid when selling · halfway between mid and ask when buying</span></div>
@@ -836,6 +913,10 @@ async function renderSettings() {
   $$("[data-th]").forEach(b => b.onclick = async () => { ui.theme = b.dataset.th; applyTheme(); await api("settings_set", {theme: ui.theme}); render(); });
   $$("[data-rexp]").forEach(b => b.onclick = async () => { const r = await api("export_run", {id: +b.dataset.rexp}); if (r.ok) toast(`${I("check")} Saved ${esc(r.path)}`); else if (r.error) toast(esc(r.error)); });
   $("#openDir").onclick = () => api("open_folder");
+  $$("[data-ar]").forEach(b => b.onclick = async () => { await save({auto_refresh: +b.dataset.ar}); ui.autoMin = +b.dataset.ar; setAutoRefresh(); render(); });
+  $$("[data-eod]").forEach(b => b.onclick = async () => { await save({eod_summary: b.dataset.eod === "1"}); render(); });
+  $("#testEod").onclick = async () => { const r = await api("test_notify", {kind: "eod"}); toast((r.ok ? I("check") + " " : I("x") + " ") + esc(r.msg), 5000); };
+  renderAlertRules(s.alerts, save);
   $("#testNotify").onclick = async () => { const r = await api("test_notify"); toast((r.ok ? I("check") + " " : I("x") + " ") + esc(r.msg), 5000); };
   $("#tagMgr").onclick = () => showTags(s.tags);
   if ($("#closeRunBtn")) $("#closeRunBtn").onclick = closeRun;
@@ -918,7 +999,7 @@ function paintSplash(s) {
 }
 async function startup() {
   boot = await api("boot");
-  ui.theme = boot.theme || "system"; applyTheme();
+  ui.theme = boot.theme || "system"; applyTheme(); ui.autoMin = boot.auto_refresh ?? 10; setAutoRefresh();
   if (boot.demo) { const d = document.createElement("div"); d.className = "demo"; d.textContent = "Demo mode · synthetic data · separate demo ledger"; document.body.appendChild(d); }
   await api("loaded");
   setInterval(async () => { const h = await api("heartbeat"); if (h.restarting) $("#splash").innerHTML = `<div class=splash><div class=modal><h3>${LOGO} Restarting…</h3><div class=meta>Ghost Trader is restarting. If this is a browser tab, you can close it.</div></div></div>`; }, 5000);

@@ -438,7 +438,19 @@ The main screen. From top to bottom:
 | Early assignment risk | A short call is in the money ahead of an ex-dividend date. |
 | Startup warnings | A startup step was skipped or failed. |
 
-On expiration-day mornings, Ghost Trader can also send a desktop notification at 7:45 AM Central, even when the app is closed. Turn it on in Settings → *Expiration-day alerts* and use *Send test* to check it works.
+### Notifications
+
+Ghost Trader can send desktop notifications, even when the app is closed. A small timer checks at 7:45 AM and 3:30 PM Central on trading days.
+
+| Notification | When |
+|---|---|
+| Expiration day | 7:45 AM on a day your options expire: which ones, and TQQQ versus each strike. |
+| End-of-day summary | 3:30 PM: the day's change in account value, premium collected, interest earning per day, and what expires on the next trading day. Turn it on or off in Settings → Notifications. *Send now* shows today's. |
+| Indicator alerts | When a reading you chose crosses your level, for example the 14,3,3 stochastic dropping below 20, Fear & Greed going under 25, or the VIX rising above 30. |
+
+Indicator alerts are set up in Settings → Notifications. Each rule picks a reading (any of the four stochastics, the VIX, or Fear & Greed), *below* or *above*, and a level. *Add suggested* fills in four common ones. Each row shows the reading right now, with a dot if it's already past the level.
+
+An alert fires **once per crossing**. If the stochastic drops below 20 and stays there for a week, you hear about it once. It fires again only after the reading goes back above 20 and then drops below it again. Alerts are checked whenever the indicators refresh in the app and at the two timer times, and each one is logged in History.
 
 ### Calendar
 
@@ -450,6 +462,7 @@ Below Shares, a month view of weekdays shows:
 - Interest pay dates.
 - Days you traded (double-click to see that day in History).
 - Market events: Fed (FOMC) decisions, CPI inflation reports, the monthly jobs report, and TQQQ ex-dividend dates.
+- Earnings dates for the biggest Nasdaq-100 companies: NVIDIA, Apple, Microsoft, Amazon, Alphabet, Meta, Broadcom and Tesla. Their results can move the whole index, and TQQQ three times as much, overnight. Dates come from Yahoo and are checked once a day.
 
 ### Chain
 
@@ -459,6 +472,7 @@ The option chain for TQQQ: every strike with a bid, for one expiration at a time
 - **Calls / Both / Puts:** show one side or both. In Both, calls are on the left and puts on the right, with strikes down the middle.
 - **Shading** marks in-the-money strikes. A line shows where the current TQQQ price falls.
 - A **dot** next to a strike means you hold that contract. Double-click it to jump to the position.
+- **Vol** (volume) shows how many contracts of that strike traded today. Strikes that trade more usually have tighter bid–ask spreads, which matters for real fills.
 - **Click any bid, ask or mid** to open a ticket for that contract.
 - **Refresh** fetches the chain again.
 
@@ -470,6 +484,7 @@ The ticket opens on the right. It shows:
 - **Quote:** bid, ask, mid, implied volatility and delta.
 - **Contracts and fill price.** The fill price starts at the mid when selling and halfway between the mid and the ask when buying. You can type any price from the bid to the ask.
 - **What happens:** premium in, collateral set aside (or shares locked), interest on the collateral to expiration, the return if it expires worthless, and your Available cash before and after.
+- **Chances** (when selling to open): three lines, each with a plain percentage. **Chance of expiring worthless** (TQQQ finishes on the keep-the-premium side of the strike), **chance of assignment** (or **of being called away** for a covered call; always 100% minus the first line), and **chance of profit at expiration** (TQQQ finishes on the profitable side of your breakeven, which for a put is the strike minus the premium, so profit can include being assigned). Hover any line for exactly what it means for that contract. These are estimates from the option's implied volatility, the same math that prices the option, not predictions. They assume the market's expected volatility is right and say nothing about direction.
 - **Note and tags:** write why you're making the trade and tag it (for example `#earnings-week`). You'll see notes and tags again in History.
 - **Compare:** a table of the same trade across other **dates** or other **strikes**, with return and annualized return. The best annualized return gets a star. Click a row to switch to it.
 - **Rule check:** a green line if the trade passes every rule, or a red line saying exactly what's wrong.
@@ -559,10 +574,22 @@ How the run is doing, and how it compares with simpler choices:
 
 Each chart can be switched to a table view.
 
+**Readings at entry vs. outcomes** (below the charts) uses the readings saved with your trades. It groups your finished short options by what a reading was when you opened them, for example the 14,3,3 stochastic under 20, between 20 and 80, or over 80. Tabs switch between the four stochastics, the VIX and Fear & Greed. For each group it shows:
+
+- **Trades** in the group, and the **win rate** (a positive result).
+- **Average % of premium kept** on the option.
+- How many **expired worthless**, and how many were **assigned or called away**.
+- **Average result.** Assigned puts count the shares at the closing price on the day they were assigned, so a loss on the shares isn't hidden behind the premium.
+
+With only a few trades in a group, the numbers say very little.
+
 ### Settings
 
 - **Trading:** the rules, the fill defaults, and the switch for buying options to open.
-- **Data & interest:** the Alpha Vantage key, rate source, manual rate, haircut, and expiration-day alerts.
+- **Data & interest:** the Alpha Vantage key, rate source, manual rate, haircut, **auto-refresh**, and expiration-day alerts.
+- **Notifications:** the end-of-day summary switch and your indicator alerts (see [Notifications](#notifications)).
+
+**Auto-refresh** re-fetches TQQQ and the quotes for your open positions every 5, 10 or 15 minutes while the market is open (10 by default), so P&L, alerts and the header stay current without clicking Refresh. It pauses the screen update while a ticket or dialog is open. Quotes are still Yahoo's, about 15 minutes behind.
 - **Runs & app:** the current run, past runs, closing a run, the data folder, the last backup, and the version.
 - **Appearance:** theme (light, dark, or match system).
 
@@ -611,6 +638,7 @@ This walks through selling one cash-secured put. Read it with Ghost Trader open.
 | Called away | Shares sold at the strike because a covered call was assigned. |
 | Cash-secured put | A put sold with the full purchase cost set aside as cash. |
 | Collateral | Cash set aside to secure a short put. |
+| Chance of profit | An estimate, from implied volatility, of the chance a trade finishes beyond its breakeven at expiration. For a short put that includes assignments above the breakeven. |
 | Covered call | A call sold against 100 shares you own per contract. |
 | Delta | How much an option's price moves per $1 move in the stock. Also used as a rough chance of finishing in the money. |
 | %D | In the 14,3,3 stochastic, a 3-day average of %K. |
@@ -640,6 +668,7 @@ This walks through selling one cash-secured put. Read it with Ghost Trader open.
 | Time value | The part of an option's price beyond its intrinsic value. |
 | VIX | The CBOE Volatility Index: how much movement S&P 500 options are pricing in. |
 | Volatility decay | The tendency of a daily-leveraged fund to lose ground in a choppy market. |
+| Volume | How many contracts of an option traded today. |
 | Wheel | Cycling between cash-secured puts and covered calls. |
 
 ---

@@ -1,10 +1,12 @@
-"""Expiration-day nudges: a desktop notification on the morning your options expire.
+"""Desktop notifications from the weekday timer: the expiration-day nudge (7:45 AM CT), the end-of-day summary
+(3:30 PM CT), and indicator alerts (checked at both times).
 
-A systemd user timer runs `ghost-trader --notify` every weekday at 7:45 AM Central, whether or not the app is open.
+A systemd user timer runs `ghost-trader --notify` at those times on weekdays, whether or not the app is open.
 The app sets the timer up itself (and install.sh does too); it needs `notify-send` and a notification daemon
 (mako, dunst, swaync, ...) running in the desktop session.
 """
 import datetime as dt
+import json
 import logging
 import os
 import shutil
@@ -17,6 +19,7 @@ log = logging.getLogger("ghost_trader.notify")
 
 UNIT = "ghost-trader-nudge"
 TIME_CT = "07:45"
+EOD_CT = "15:30"
 DAEMONS = ("mako", "dunst", "swaync", "fnott", "xfce4-notifyd", "notification-daemon", "plasmashell", "gnome-shell")
 
 
@@ -36,17 +39,18 @@ def launcher():
 
 def unit_texts():
     service = f"""[Unit]
-Description={APP_NAME}: expiration-day notification check
+Description={APP_NAME}: weekday notification check
 
 [Service]
 Type=oneshot
 ExecStart={launcher()} --notify
 """
     timer = f"""[Unit]
-Description={APP_NAME}: weekday morning check for options expiring today
+Description={APP_NAME}: weekday checks (expirations, end-of-day summary, indicator alerts)
 
 [Timer]
 OnCalendar=Mon..Fri {TIME_CT} America/Chicago
+OnCalendar=Mon..Fri {EOD_CT} America/Chicago
 Persistent=true
 
 [Install]
@@ -91,7 +95,7 @@ def status():
                                     text=True, timeout=5).stdout.strip() == "active"
         except Exception:  # noqa: BLE001
             active = None
-    return {"installed": installed, "active": active, "time": "7:45 AM CT, weekdays",
+    return {"installed": installed, "active": active, "time": "7:45 AM and 3:30 PM CT, weekdays",
             "notify_send": bool(shutil.which("notify-send")), "daemon": daemon_running()}
 
 
@@ -118,7 +122,7 @@ def ensure_timer():
             return f"couldn't enable the notification timer: {(r.stderr or '').strip()}"
     except Exception as e:  # noqa: BLE001
         return f"couldn't enable the notification timer: {e}"
-    return "expiration-day notifications set up (7:45 AM CT on weekdays)"
+    return "notifications set up (7:45 AM and 3:30 PM CT on weekdays)"
 
 
 def expiring_today(led, today):
@@ -144,12 +148,95 @@ def message(positions, price):
     return title, body
 
 
-def daily_check(led, quote_price=None, now=None):
-    """Called by the timer. Sends at most one notification per day. Returns what it did, for logging."""
+def eod_summary(led, price, today, rate=None):
+    """(title, body) for the end-of-day summary, or None without a run."""
+    r = led.run()
+    if not r:
+        return None
+    now_c = led.account_value_c(price)
+    prev = led.db.one("SELECT account_value_c FROM snapshots WHERE run_id=? AND day<? ORDER BY day DESC LIMIT 1",
+                      (r["id"], today.isoformat()))
+    prev_c = prev[0] if prev else r["start_cash_c"]
+    chg = now_c - prev_c
+    prem = 0
+    for e in led.db.q("SELECT ts, data FROM events WHERE run_id=? AND kind='Trade' ORDER BY ts DESC LIMIT 200", (r["id"],)):
+        if timeutil.parse(e[0]).astimezone(timeutil.CT).date() != today:
+            continue
+        d = json.loads(e[1] or "{}")
+        if d.get("action") == "sell_to_open":
+            prem += d.get("premium_c") or 0
+    avail, coll = led.balances()
+    intr = (avail + coll) * (rate or 0) / 100 / 365
+    nxt = marketcal.next_trading_day(today)
+    tomorrow = [p for p in led.positions() if p["expiry"] == nxt.isoformat()]
+    sign = "+" if chg >= 0 else "−"
+    pct = chg / prev_c * 100 if prev_c else 0
+    title = f"{APP_NAME} today: {sign}${abs(chg) / 100:,.2f} ({sign}{abs(pct):.2f}%)"
+    lines = [f"Account value ${now_c / 100:,.2f}" + (f" · {SYMBOL} {price:.2f}" if price else "")]
+    lines.append(f"Premium today ${prem / 100:,.2f} · interest about ${intr / 100:,.2f}/day")
+    if tomorrow:
+        n = sum(p["open_qty"] for p in tomorrow)
+        what = ", ".join(f"${p['strike']:g} {'Put' if p['type'] == 'put' else 'Call'} ×{p['open_qty']}" for p in tomorrow)
+        lines.append(f"Expiring {timeutil.fmt_date(nxt)}: {n} contract{'s' if n != 1 else ''} ({what})")
+    else:
+        lines.append(f"Nothing expires {timeutil.fmt_date(nxt)}")
+    return title, "\n".join(lines)
+
+
+def _once(name, today, fn):
+    """Run fn() once per day per name (a marker file); fn returns (sent_ok, text)."""
+    mark = config.data_dir() / f"{name}-{today.isoformat()}"
+    if mark.exists():
+        return f"{name}: already done today"
+    ok, text = fn()
+    if ok:
+        mark.write_text(text)
+        cutoff = f"{name}-{(today - dt.timedelta(days=14)).isoformat()}"
+        for old in config.data_dir().glob(f"{name}-*"):
+            if old != mark and old.name < cutoff:
+                old.unlink(missing_ok=True)
+    return text
+
+
+def daily_check(led, quote_price=None, now=None, settings=None, readings=None, rate=None):
+    """Called by the timer. Mornings: expiration nudge. From 3 PM CT: end-of-day summary (if on).
+    Both times: indicator alerts (if a readings function is given). Returns what it did, for logging."""
     now = now or timeutil.now()
     today = now.astimezone(timeutil.CT).date()
     if not marketcal.is_trading_day(today):
         return "not a trading day"
+    settings = settings or config.Settings()
+    out = []
+    if readings is not None:
+        from . import alerts
+        try:
+            fired = alerts.check(readings(), settings, send, led)
+            out.append(f"alerts: {len(fired)} fired")
+        except Exception as e:  # noqa: BLE001
+            log.warning("alerts: %s", e)
+            out.append(f"alerts failed: {e}")
+    if now.astimezone(timeutil.CT).hour >= 15:
+        if settings.get("eod_summary") is False:
+            return " · ".join(out + ["end-of-day summary off"])
+        price = None
+        try:
+            price = quote_price() if quote_price else None
+        except Exception as e:  # noqa: BLE001
+            log.warning("eod price: %s", e)
+        if price is None:
+            price = led.db.val("SELECT last FROM quotes WHERE contract=?", ("_U_" + SYMBOL,))
+
+        def go():
+            m = eod_summary(led, price, today, rate)
+            if not m:
+                return False, "no run"
+            ok, msg = send(*m)
+            return ok, f"{m[0]} · {msg}"
+        return " · ".join(out + [_once("eod", today, go)])
+    return " · ".join(out + [_morning(led, quote_price, today)])
+
+
+def _morning(led, quote_price, today):
     mark = config.data_dir() / f"nudged-{today.isoformat()}"
     if mark.exists():
         return "already notified today"

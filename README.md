@@ -46,6 +46,10 @@ The full design lives in the project spec (`ghost-trader-spec.md` in the Claude 
 
 The **Indicators** tab (key `3`) charts TQQQ's stochastic oscillator (14,3,3 slow, plus raw 30, 60 and 180-day), the VIX, and CNN's Fear & Greed index over 3M / 6M / 1Y / 2Y. TQQQ and the VIX come from Yahoo; Fear & Greed is read from the data CNN's own page uses (no official feed, so it can break if CNN changes its site; the tab says so and shows the rest). Every trade saves the readings at that moment; they show in History, trade details and the CSV exports.
 
+## Notifications
+
+A weekday timer (7:45 AM and 3:30 PM CT) sends desktop notifications even when the app is closed: the expiration-day reminder, an end-of-day summary, and **indicator alerts** you set in Settings → Notifications (e.g. 14,3,3 stochastic below 20, VIX above 30), once per crossing. While the market is open the app also auto-refreshes quotes every 5, 10 or 15 minutes.
+
 ## Install (Arch Linux)
 
 From the AUR, once the package is listed there:

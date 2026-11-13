@@ -57,6 +57,9 @@ CREATE TABLE reports(id INTEGER PRIMARY KEY, ts TEXT NOT NULL, data TEXT NOT NUL
     2: """
 CREATE TABLE trade_readings(event_id INTEGER PRIMARY KEY, asof TEXT NOT NULL, data TEXT NOT NULL);
 """,
+    3: """
+CREATE TABLE earnings(symbol TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY(symbol, day));
+""",
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

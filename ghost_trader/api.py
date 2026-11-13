@@ -3,14 +3,15 @@ arguments and returns JSON-able data. Rule failures come back as {'error': messa
 import datetime as dt
 import json
 import logging
+import math
 import subprocess
 import threading
 import time
 from pathlib import Path
 
-from . import SYMBOL, __version__, config, csvout, db as dbm, events, indicators, manual, marketcal, notify, perf, timeutil
+from . import SYMBOL, __version__, alerts, config, csvout, db as dbm, events, indicators, manual, marketcal, notify, perf, timeutil
 from .ledger import Ledger, TradeError, cents, money, strike_txt
-from .market import DemoProvider, Quotes, Rates, YahooProvider
+from .market import DemoProvider, Quotes, Rates, YahooProvider, ncdf
 from .startup import Startup
 
 log = logging.getLogger("ghost_trader.api")
@@ -33,6 +34,7 @@ class App:
         self.rates = Rates(self.db, self.settings, self.provider)
         self.quotes = Quotes(self.db, self.provider, self.rates)
         self.ind = indicators.Indicators(self.provider)
+        self.ind.on_refresh = self._check_alerts
         self.startup = Startup(self)
         self.data_asof = None
         self.loaded = threading.Event()
@@ -88,6 +90,7 @@ class App:
     # ------------------------------------------------------------------ boot / lifecycle
     def api_boot(self):
         return {"version": __version__, "demo": self.demo, "theme": self.settings.get("theme"),
+                "auto_refresh": self.settings.get("auto_refresh"),
                 "provider": self.provider.name, "symbol": SYMBOL}
 
     def api_loaded(self):
@@ -135,6 +138,7 @@ class App:
 
     def api_state(self):
         self.ind.warm()
+        self._earnings_refresh()
         S = self.price()
         r = self.led.run()
         u = {}
@@ -255,7 +259,7 @@ class App:
         held = [_pubpos(p) for p in self.led.positions() if p["expiry"] == e] if self.led.run() else []
         rows = {}
         for x in c["rows"]:
-            rows.setdefault(x["strike"], {})[x["type"]] = {k: x.get(k) for k in ("bid", "ask", "mid", "delta", "iv")}
+            rows.setdefault(x["strike"], {})[x["type"]] = {k: x.get(k) for k in ("bid", "ask", "mid", "delta", "iv", "volume")}
         strikes = [{"k": k, "call": v.get("call"), "put": v.get("put")} for k, v in sorted(rows.items())]
         return {"expiry": e, "label": timeutil.fmt_exp(e), "groups": self._exp_groups(exps), "strikes": strikes,
                 "price": u["price"], "prev_close": u.get("prev_close"), "stale": c["stale"] or not self._market()["open"],
@@ -276,6 +280,24 @@ class App:
         if side == "sell":
             return q["mid"]
         return round((q["mid"] + q["ask"]) / 2 + 1e-9, 2)
+
+    @staticmethod
+    def _chances(type_, S, K, px, dte, iv, rate):
+        """Chance of profit at expiration and chance the short option expires worthless, from implied volatility
+        (lognormal, risk-neutral). Estimates, not predictions. None when there isn't enough to go on."""
+        if not (S and K and iv and iv > 0) or dte is None or dte < 0:
+            return None
+        T = max(dte, 0.5) / 365
+        r = (rate or 0) / 100
+        sd = iv * math.sqrt(T)
+
+        def above(x):  # P(S_T > x)
+            return ncdf((math.log(S / x) + (r - iv * iv / 2) * T) / sd) if x > 0 else 1.0
+        if type_ == "put":
+            be = K - px
+            return {"profit": above(be), "worthless": above(K), "breakeven": round(be, 2), "iv": iv}
+        be = K + px
+        return {"profit": 1 - above(be), "worthless": 1 - above(K), "breakeven": round(be, 2), "iv": iv}
 
     def api_ticket(self, order, fresh=False):
         """Quote + rule check + effects + compare tables for the ticket side panel."""
@@ -315,6 +337,7 @@ class App:
             base = coll if coll else (S or 0) * 100 * qty
             ret = (prem + intr) / base if base else 0
             out.update(interest_c=cents(intr), ret=ret, ann=ret * 365 / max(dte, 1))
+            out["chances"] = self._chances(o["type"], S, k, px, dte, (q or {}).get("iv"), rate)
         # strikes available (with a bid) for this expiry/type, and the expiration list
         try:
             c = self.quotes.chain(o["expiry"])
@@ -635,6 +658,17 @@ class App:
             c = days.get(ev["day"].isoformat())
             if c:
                 c.setdefault("events", []).append({"kind": ev["kind"], "text": ev["short"], "tip": ev["name"]})
+        earn = {}
+        for sym, day in self.db.q("SELECT symbol, day FROM earnings WHERE day>=? AND day<=? ORDER BY symbol",
+                                  (grid_start.isoformat(), grid_end.isoformat())):
+            earn.setdefault(day, []).append(sym)
+        for day, syms in earn.items():
+            c = days.get(day)
+            if c:
+                c.setdefault("events", []).append({
+                    "kind": "earn", "text": " · ".join(syms) + " earnings",
+                    "tip": f"{', '.join(syms)} report{'s' if len(syms) == 1 else ''} earnings (date from Yahoo; "
+                           "usually before the open or after the close). Big Nasdaq weights: can move TQQQ overnight."})
         for exd, amt in self._ex_dividends():
             c = days.get(exd.isoformat())
             if c:
@@ -663,6 +697,31 @@ class App:
                 "this_month": today.strftime("%Y-%m"), "run_start_month": start_m,
                 "events_note": f"Fed, CPI and jobs dates are built in through {events.COVERED_THROUGH.strftime('%B %Y')}; "
                                "later ones arrive with an app update." if beyond else None}
+
+    EARNINGS = ("NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "AVGO", "TSLA")
+
+    def _earnings_refresh(self):
+        """Fetch upcoming earnings dates for the Nasdaq heavyweights, at most once a day (in the background)."""
+        today = timeutil.today_ct().isoformat()
+        if self.db.val("SELECT value FROM meta WHERE key='earnings_checked'") == today:
+            return
+        if getattr(self, "_earn_thread", None) and self._earn_thread.is_alive():
+            return
+
+        def run():
+            try:
+                got = self.provider.earnings_dates(self.EARNINGS)
+                with self.db.tx():
+                    for sym, ds in got.items():
+                        # an upcoming date can move: replace this symbol's future dates with the new ones
+                        self.db.x("DELETE FROM earnings WHERE symbol=? AND day>=?", (sym, today))
+                        for d in ds:
+                            self.db.x("INSERT OR IGNORE INTO earnings(symbol,day) VALUES(?,?)", (sym, d.isoformat()))
+                    self.db.x("INSERT OR REPLACE INTO meta(key,value) VALUES('earnings_checked',?)", (today,))
+            except Exception as e:  # noqa: BLE001
+                log.warning("earnings dates: %s", e)
+        self._earn_thread = threading.Thread(target=run, daemon=True, name="earnings")
+        self._earn_thread.start()
 
     def _ex_dividends(self):
         """[(date, amount)] past ex-dates from Yahoo plus the next announced one; fetched once per session."""
@@ -725,9 +784,17 @@ class App:
                               "cash_c": r["start_cash_c"]},
                 "past": past, "data_dir": str(config.data_dir()), "last_backup": last_b, "version": __version__,
                 "tags": self._tag_counts(), "provider": self.provider.name, "demo": self.demo,
-                "nudges": notify.status(), "install": config.install_kind()}
+                "nudges": notify.status(), "install": config.install_kind(),
+                "alerts": {"metrics": alerts.METRICS, "presets": alerts.PRESETS,
+                           "rules": alerts.clean_rules(self.settings.get("ind_alerts")), "now": self.ind.snapshot()}}
 
-    def api_test_notify(self):
+    def api_test_notify(self, kind="expiry"):
+        if kind == "eod":
+            m = notify.eod_summary(self.led, self.price(), timeutil.today_ct(), self.rates.for_day(timeutil.today_ct()))
+            if not m:
+                return {"ok": False, "msg": "Start a run first."}
+            ok, msg = notify.send(*m)
+            return {"ok": ok, "msg": msg}
         ok, msg = notify.send("Ghost Trader", "Test notification: expiration-day reminders will look like this.")
         return {"ok": ok, "msg": msg}
 
@@ -741,6 +808,15 @@ class App:
             kw["haircut"] = float(str(kw["haircut"] or 0).replace("%", ""))
         if "long_options" in kw:
             kw["long_options"] = bool(kw["long_options"])
+        if "ind_alerts" in kw:
+            kw["ind_alerts"] = alerts.clean_rules(kw["ind_alerts"])
+        if "auto_refresh" in kw:
+            v = int(kw["auto_refresh"] or 0)
+            if v not in (0, 5, 10, 15):
+                return {"error": "Auto-refresh can be off, 5, 10 or 15 minutes."}
+            kw["auto_refresh"] = v
+        if "eod_summary" in kw:
+            kw["eod_summary"] = bool(kw["eod_summary"])
         self.settings.update(**kw)
         changed = [k for k in kw if old.get(k) != self.settings.get(k) and k not in ("chain_exp", "chain_view", "theme")]
         if changed and self.led.run():
@@ -751,6 +827,12 @@ class App:
                 v = self.settings.get(k)
                 if k == "av_key":
                     parts.append("Alpha Vantage key updated")
+                elif k == "ind_alerts":
+                    parts.append("indicator alerts: " + (", ".join(alerts.describe(x) for x in v if x["on"]) or "none on"))
+                elif k == "auto_refresh":
+                    parts.append(f"auto-refresh {'every ' + str(v) + ' min' if v else 'off'}")
+                elif k == "eod_summary":
+                    parts.append(f"end-of-day summary {'on' if v else 'off'}")
                 elif k == "long_options":
                     parts.append(f"buying options to open {'on' if v else 'off'}")
                 else:
@@ -934,6 +1016,88 @@ class App:
             return {"ok": True}
         except OSError as e:
             return {"error": f"Couldn't open the folder: {e}"}
+
+    def _check_alerts(self):
+        """After the indicators refresh: notify about any alert that just crossed its level."""
+        if self.demo and not self.settings.get("ind_alerts"):
+            return
+        try:
+            alerts.check(self.ind.snapshot(), self.settings, notify.send, self.led)
+        except Exception:  # noqa: BLE001
+            log.exception("indicator alerts")
+
+    def api_refresh_open(self):
+        """Auto-refresh while the market is open: TQQQ, every open position's chain, and the indicators."""
+        if not marketcal.is_open(timeutil.now()):
+            return {"ok": False, "closed": True}
+        errs = []
+        try:
+            self.quotes.underlying(fresh=True)
+        except Exception as e:  # noqa: BLE001
+            errs.append(str(e))
+        for exp in sorted({p["expiry"] for p in self.led.positions()}):
+            try:
+                self.quotes.chain(exp, fresh=True)
+            except Exception as e:  # noqa: BLE001
+                errs.append(f"{exp}: {e}")
+        self.data_asof = timeutil.now()
+        self.ind.warm()
+        return {"ok": not errs, "errors": errs, "asof": timeutil.fmt_ct(self.data_asof)}
+
+    # ------------------------------------------------------------------ readings vs outcomes
+    OUTCOME_GROUPS = {
+        "stoch14": ("stoch14_k", [(None, 20, "≤ 20 (oversold zone)"), (20, 80, "20–80"), (80, None, "≥ 80 (overbought zone)")]),
+        "stoch30": ("stoch30_k", [(None, 20, "≤ 20"), (20, 80, "20–80"), (80, None, "≥ 80")]),
+        "stoch60": ("stoch60_k", [(None, 20, "≤ 20"), (20, 80, "20–80"), (80, None, "≥ 80")]),
+        "stoch180": ("stoch180_k", [(None, 20, "≤ 20"), (20, 80, "20–80"), (80, None, "≥ 80")]),
+        "vix": ("vix", [(None, 15, "under 15"), (15, 20, "15–20"), (20, 30, "20–30"), (30, None, "30 and up")]),
+        "fg": ("fg", [(None, 25, "Extreme fear (0–24)"), (25, 45, "Fear (25–44)"), (45, 56, "Neutral (45–55)"),
+                      (56, 76, "Greed (56–75)"), (76, None, "Extreme greed (76–100)")]),
+    }
+
+    def api_outcomes(self, by="stoch14"):
+        """Finished short options grouped by a reading saved when they were opened: win rate, premium kept, results."""
+        key, bands = self.OUTCOME_GROUPS.get(by, self.OUTCOME_GROUPS["stoch14"])
+        r = self.led.run()
+        rows = []
+        if r:
+            rows = self.db.q(
+                "SELECT p.*, rd.data AS rdata FROM positions p "
+                "JOIN events e ON e.position_id=p.id AND e.kind='Trade' AND e.data LIKE '%\"sell_to_open\"%' "
+                "JOIN trade_readings rd ON rd.event_id=e.id "
+                "WHERE p.run_id=? AND p.side='short' AND p.status!='open' GROUP BY p.id", (r["id"],))
+        groups = [{"label": lab, "n": 0, "wins": 0, "expired": 0, "assigned": 0, "kept": [], "result_c": 0, "ids": []}
+                  for _, _, lab in bands]
+        unread = 0
+        for p in rows:
+            v = json.loads(p["rdata"]).get(key)
+            if v is None:
+                unread += 1
+                continue
+            g = next(g for (lo, hi, _), g in zip(bands, groups) if (lo is None or v >= lo) and (hi is None or v < hi))
+            prem = cents(p["open_price"]) * 100 * p["qty"]
+            res = p["realized_c"]
+            if p["status"] == "assigned" and p["type"] == "put":
+                ev = self.db.one("SELECT data FROM events WHERE position_id=? AND kind='Assigned'", (p["id"],))
+                close = json.loads(ev[0]).get("close") if ev else None
+                if close is not None:  # mark the shares at the closing price they were assigned on
+                    res += cents((close - p["strike"]) * 100 * p["qty"])
+            g["n"] += 1
+            g["wins"] += res > 0
+            g["expired"] += p["status"] == "expired"
+            g["assigned"] += p["status"] in ("assigned", "called")
+            g["kept"].append(p["realized_c"] / prem if prem else 0)
+            g["result_c"] += res
+            g["ids"].append(p["id"])
+        out = []
+        for g in groups:
+            n = g["n"]
+            out.append({"label": g["label"], "n": n, "win_rate": g["wins"] / n if n else None,
+                        "kept": sum(g["kept"]) / n if n else None, "expired": g["expired"], "assigned": g["assigned"],
+                        "avg_result_c": round(g["result_c"] / n) if n else None, "ids": g["ids"]})
+        return {"by": by, "groups": out, "total": len(rows) - unread, "without": unread,
+                "options": [["stoch14", "Stochastic 14,3,3"], ["stoch30", "30-day"], ["stoch60", "60-day"],
+                            ["stoch180", "180-day"], ["vix", "VIX"], ["fg", "Fear & Greed"]]}
 
     def api_refresh_quote(self, expiry, type, strike):
         try:

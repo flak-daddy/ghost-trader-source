@@ -113,6 +113,7 @@ class Indicators:
         self.lock = threading.Lock()
         self.warming = None
         self.data = {}   # source -> {"ok": bool, "value": ..., "error": str, "at": epoch}
+        self.on_refresh = None  # called (no args) after a refresh that got new data
 
     def _fresh(self, src, ttl=TTL):
         e = self.data.get(src)
@@ -143,6 +144,12 @@ class Indicators:
                     # keep the last good value (marked failed) so the tab still shows something
                     self.data[src] = {"ok": False, "value": prev.get("value"), "error": str(e) or e.__class__.__name__,
                                       "at": prev.get("at", 0)}
+            got_new = any(self.data.get(x, {}).get("ok") for x in jobs)
+        if got_new and self.on_refresh:
+            try:
+                self.on_refresh()
+            except Exception:  # noqa: BLE001
+                log.exception("on_refresh")
 
     def warm(self):
         """Refresh in the background if stale; returns immediately."""

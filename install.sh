@@ -104,15 +104,15 @@ DESK
 command -v update-desktop-database >/dev/null && update-desktop-database -q "$APPS" || true
 ok "app menu entry"
 
-# 8. Expiration-day notifications (systemd user timer, weekdays 7:45 AM CT) --------------------------------
+# 8. Notifications (systemd user timer, weekdays 7:45 AM and 3:30 PM CT) --------------------------------
 if command -v notify-send >/dev/null; then
   note="$(.venv/bin/python -c 'from ghost_trader import notify; print(notify.ensure_timer() or "already set up")')"
-  ok "expiration-day notifications: $note"
+  ok "notifications: $note"
   if ! .venv/bin/python -c 'import sys; from ghost_trader import notify; sys.exit(0 if notify.daemon_running() else 1)'; then
     warn "no notification daemon is running, so notifications won't show. Fix: sudo pacman -S mako  (then add 'exec-once = mako' to your Hyprland config)"
   fi
 else
-  warn "notify-send not found, so expiration-day notifications are off. Fix: sudo pacman -S libnotify mako  (then run ./install.sh again)"
+  warn "notify-send not found, so desktop notifications are off. Fix: sudo pacman -S libnotify mako  (then run ./install.sh again)"
 fi
 
 # 9. Folders open in Dolphin ------------------------------------------------------------------------------

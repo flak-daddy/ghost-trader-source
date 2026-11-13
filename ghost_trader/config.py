@@ -16,6 +16,9 @@ DEFAULTS = {
     "theme": "system",       # light | dark | system
     "chain_exp": None,       # last expiration viewed on the Chain
     "chain_view": "both",    # calls | both | puts
+    "ind_alerts": [],        # indicator alert rules (see alerts.py)
+    "auto_refresh": 10,      # minutes between quote refreshes while the market is open; 0 = off
+    "eod_summary": True,     # end-of-day summary notification at 3:30 PM CT
 }
 
 

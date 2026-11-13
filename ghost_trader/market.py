@@ -139,6 +139,21 @@ class YahooProvider:
         from .indicators import fetch_cnn
         return fetch_cnn(start)
 
+    def earnings_dates(self, symbols):
+        """{symbol: [upcoming earnings dates]} from Yahoo's calendar; symbols that fail are left out."""
+        out = {}
+        for sym in symbols:
+            try:
+                cal = self._t(sym).calendar or {}
+                ds = cal.get("Earnings Date") or []
+                ds = ds if isinstance(ds, (list, tuple)) else [ds]
+                got = [d if isinstance(d, dt.date) else getattr(d, "date", lambda: None)() for d in ds]
+                if got and got[0]:
+                    out[sym] = [got[0]]   # Yahoo sometimes gives a range; the first date is the expected one
+            except Exception as e:  # noqa: BLE001
+                log.warning("earnings %s: %s", sym, e)
+        return out
+
     def dividends(self):
         s = self._t().dividends
         return [(idx.date(), float(v)) for idx, v in s.items()] if s is not None else []
@@ -219,8 +234,9 @@ class DemoProvider:
                 spread = max(0.01, round(px * 0.04, 2))
                 bid = max(0.0, round(px - spread / 2, 2))
                 ask = round(px + spread / 2, 2) if px > 0.005 else (0.01 if px > 0.0005 else 0.0)
+                vol = int(4000 * math.exp(-abs(m) * 9) * (1.4 if typ == "put" else 1.0)) if bid > 0 else 0
                 rows.append({"type": typ, "strike": K, "bid": bid, "ask": ask, "last": round(px, 2), "iv": round(iv, 4),
-                             "volume": 0, "oi": 0})
+                             "volume": vol, "oi": 0})
         return rows
 
     def daily_closes(self, start, end, symbol=None):
@@ -261,6 +277,17 @@ class DemoProvider:
         back = lambda n: hist[days[-1 - n]] if len(days) > n else None  # noqa: E731
         return {"score": score, "rating": fg_rating(score), "asof": timeutil.iso(), "previous_close": back(1),
                 "week_ago": back(5), "month_ago": back(21), "year_ago": back(252), "history": hist}
+
+    def earnings_dates(self, symbols):
+        self._chk("earnings_dates")
+        today = timeutil.today_ct()
+        out = {}
+        for i, sym in enumerate(symbols):
+            d = today + dt.timedelta(days=3 + i * 4)
+            while not marketcal.is_trading_day(d):
+                d += dt.timedelta(days=1)
+            out[sym] = [d]
+        return out
 
     def dividends(self):
         return []

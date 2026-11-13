@@ -107,7 +107,7 @@ input.bad{border-color:var(--down)}
 .cal .it.exp{--chip:color-mix(in srgb,var(--warn) 22%,transparent)}.cal .it.int{--chip:color-mix(in srgb,var(--up) 16%,transparent)}.cal .it.exp.done{--chip:transparent}
 .calbar{display:flex;align-items:center;gap:8px;margin:16px 0 6px}.calbar h2{margin:0;flex:1}
 .cal .ev{font-size:11px;padding:0 6px;border-radius:4px;color:var(--text);background:color-mix(in srgb,var(--accent) 12%,transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;cursor:default}
-.cal .ev.exdiv{background:color-mix(in srgb,var(--s2) 16%,transparent)}
+.cal .ev.exdiv{background:color-mix(in srgb,var(--s2) 16%,transparent)}.cal .ev.earn{background:color-mix(in srgb,var(--s3) 16%,transparent)}
 .cal .evs{display:flex;flex-wrap:wrap;gap:3px}
 .mini.story{table-layout:fixed}.mini.story td{white-space:normal;vertical-align:top}.mini.story td.l{width:38%}
 
@@ -153,3 +153,6 @@ input.bad{border-color:var(--down)}
 .stochpanel.tblmode .stabs{border-bottom:0}
 .stabs button{background:none;border:0;border-bottom:2px solid transparent;color:var(--dim);font:inherit;font-size:13px;padding:8px 14px 7px;cursor:pointer;margin-bottom:-1px}
 .stabs button:hover{color:var(--text)}.stabs button.on{color:var(--text);font-weight:600;border-bottom-color:var(--accent)}
+.chances{border-top:1px dashed var(--line);margin-top:4px;padding-top:2px}
+.arule{display:flex;gap:6px;align-items:center;margin:3px 0}.arule select{padding:2px 4px}
+.outt th,.outt td{padding:7px 12px}.outt tr.dim td{opacity:.5}

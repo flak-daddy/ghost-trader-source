@@ -95,9 +95,18 @@ def notify_check():
         d = dbm.DB(config.db_path())
         led = Ledger(d, config.Settings())
 
+        prov = YahooProvider()
+
         def price():
-            return YahooProvider().underlying()["price"]
-        result = notify.daily_check(led, price)
+            return prov.underlying()["price"]
+
+        def readings():
+            from .indicators import Indicators
+            ind = Indicators(prov)
+            ind.refresh()
+            return ind.snapshot()
+        rate = d.val("SELECT rate FROM rates ORDER BY day DESC LIMIT 1")
+        result = notify.daily_check(led, price, settings=led.settings, readings=readings, rate=rate)
         d.close()
     except Exception as e:  # noqa: BLE001
         logging.exception("notify check failed")
@@ -114,7 +123,7 @@ def main(argv=None):
     ap.add_argument("--check", action="store_true", help="test data sources, window libraries and fonts")
     ap.add_argument("--demo", action="store_true", help="synthetic data in a separate demo ledger (no network)")
     ap.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
-    ap.add_argument("--notify", action="store_true", help="send today's expiration-day notification, if any (used by the timer)")
+    ap.add_argument("--notify", action="store_true", help="run the weekday notification check: expirations, end-of-day summary, indicator alerts (used by the timer)")
     ap.add_argument("--serve", action="store_true", help="run only the local server and print its URL (testing)")
     ap.add_argument("--port", type=int, default=0)
     args = ap.parse_args(argv)
