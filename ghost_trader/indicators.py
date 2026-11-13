@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 LOOKBACKS = (14, 30, 60, 180)
 SLOW = {14: (3, 3)}          # lookback -> (%K smoothing, %D period); others are raw %K
 TTL = 15 * 60                 # seconds before a refresh
-HISTORY_DAYS = 2 * 365 + 300  # 2 years shown + room for the 180-day lookback
+HISTORY_DAYS = 5 * 365 + 300  # 5 years shown + room for the 180-day lookback
 VIX = "^VIX"
 
 CNN_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata/{start}"
@@ -129,7 +129,7 @@ class Indicators:
             start = today - dt.timedelta(days=HISTORY_DAYS)
             jobs = {"tqqq": lambda: self.provider.daily_bars(SYMBOL, start, today),
                     "vix": lambda: self.provider.daily_closes(start, today, symbol=VIX),
-                    "fg": lambda: self.provider.fear_greed(today - dt.timedelta(days=2 * 365 + 10))}
+                    "fg": lambda: self.provider.fear_greed(today - dt.timedelta(days=5 * 365 + 10))}
             for src, fn in jobs.items():
                 if not force and self._fresh(src):
                     continue

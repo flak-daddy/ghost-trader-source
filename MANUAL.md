@@ -471,7 +471,7 @@ The option chain for TQQQ: every strike with a bid, for one expiration at a time
 - **Expiration picker:** grouped by week and month, with days to expiration.
 - **Calls / Both / Puts:** show one side or both. In Both, calls are on the left and puts on the right, with strikes down the middle.
 - **Shading** marks in-the-money strikes. A line shows where the current TQQQ price falls.
-- A **dot** next to a strike means you hold that contract. Double-click it to jump to the position.
+- A **gold dot** next to a strike means you hold that contract. Double-click it to open that position's details right there in the Chain.
 - **Vol** (volume) shows how many contracts of that strike traded today. Strikes that trade more usually have tighter bid–ask spreads, which matters for real fills.
 - **Click any bid, ask or mid** to open a ticket for that contract.
 - **Refresh** fetches the chain again.
@@ -508,27 +508,29 @@ Click **Review trade** to see a summary, then **Confirm** (or press Enter). **Tr
 
 Readings for TQQQ, the VIX and Fear & Greed, explained in [Indicators](#indicators).
 
-- **Cards:** TQQQ's latest price, the four stochastic readings (with whether each rose or fell since the day before), the VIX with its 1-year range, and Fear & Greed with its readings from the prior close, 1 week, 1 month and 1 year ago.
-- **Range** (top right): 3M, 6M, 1Y, 2Y set how much history every chart and the table cover. The tab opens on 3M. Chart/Table and Refresh sit next to it.
-- **TQQQ group:** the price chart, with the stochastic below it in its own tinted panel. Tabs along the top of that panel (14,3,3 · 30-day · 60-day · 180-day) choose which stochastic it draws. Clicking a row in the stochastic card does the same. In the table view the same tabs choose the stochastic column.
-- **Market mood group:** the VIX and Fear & Greed charts.
-- **Charts:** all on the same dates. Hover anywhere to see every value for that day. **Click** to pin that day's box (Esc or its × unpins), and **double-click** a day to open History for that day.
-- **Table:** the same numbers day by day, newest first.
+- **Tiles:** TQQQ's latest price; the four stochastic readings (with whether each rose or fell since the day before), on the same light-blue tint as the stochastic chart; **VIX = …** with its change and 1-year range; and **Fear & Greed is at …** with its readings from the prior close, 1 week, 1 month and 1 year ago. The Fear & Greed tile picks up a faint tint: purple as the index moves into fear, yellow-green as it moves into greed, and almost none near 50.
+- **Three date ranges.** Each part of the page has its own **14D · 1M · 3M · 6M · 1Y · 5Y** buttons: the **Price** chart (in its header), the **Stochastic** panel (at the right end of its tabs), and **Market mood** (next to its title, for both the VIX and Fear & Greed). Each remembers your last choice. The tabs on the stochastic panel (14,3,3 · 30-day · 60-day · 180-day) choose which stochastic it draws.
+- **Hover** anywhere to see every value for that day. Every chart whose range includes that date shows its crosshair there, even when the ranges differ. **Click** to pin that day's box (Esc or its × unpins), and **double-click** a day to open History for that day.
+- **Table:** the same numbers day by day, newest first, over the Price range. The stochastic tabs choose its stochastic column.
+- 5Y needs about six years of TQQQ prices for the 180-day line; Fear & Greed shows as far back as CNN's data goes.
 - **Refresh** fetches everything again. Otherwise data is fetched when you open the tab and reused for 15 minutes.
 
 If one source can't be reached, a note says which, and the rest still shows.
 
 ### Position details
 
-Click a position (or its dot in the Chain) to open its details:
+Double-click a position on Portfolio, or its gold dot in the Chain, to open its details in the Chain:
 
 - what you sold it at and the premium, the current quote, and P&L if closed at the mark,
 - collateral or covering shares, and interest on the collateral to expiration,
+- **return if it expires worthless**, over the whole life of the trade (hover for the annualized rate),
 - how far TQQQ is from the strike and the days left,
 - what happens if it expires worthless, and what happens if it's assigned or called away,
-- your note and tags.
+- your note and tags,
+- **Chances now:** chance of expiring worthless, of assignment (or being called away), and of profit at expiration, from today's implied volatility and the days left, with **"was X%"** from when you opened it (for trades placed from v1.8.0 on). Hover a line for what it means.
+- the market readings saved with each trade.
 
-From here you can open a **Close** ticket.
+Buttons: **Show in Portfolio** (Portfolio, with this position highlighted), **Sell more**, and **Close position…**.
 
 ### Expiration and settlement
 
@@ -559,6 +561,7 @@ If you hold shares the day before an ex-dividend date, the dividend is added to 
 Every event in the run, newest first: trades, share buys and sells, expirations, assignments, interest, dividends and startup warnings.
 
 - **Filters:** All, Trades, Expirations & Assignments, Interest, Errors.
+- **The red badge** on the History tab counts errors you haven't seen. Right-click the History tab and choose **Mark all as read** to clear it. That also hides the startup-warning banner on Portfolio until something new happens.
 - **Tags:** double-click a tag anywhere to see every trade with that tag. Tags can be renamed, merged or deleted.
 - **Double-click a trade** to open the full story of that position: every event, the outcome, what was bought back, the total result, interest earned and days held.
 - **Export** the history to CSV.
@@ -574,7 +577,7 @@ How the run is doing, and how it compares with simpler choices:
 
 Each chart can be switched to a table view.
 
-**Readings at entry vs. outcomes** (below the charts) uses the readings saved with your trades. It groups your finished short options by what a reading was when you opened them, for example the 14,3,3 stochastic under 20, between 20 and 80, or over 80. Tabs switch between the four stochastics, the VIX and Fear & Greed. For each group it shows:
+**Readings at entry vs. outcomes** (below the charts) uses the readings saved with your trades. Its **14D · 1M · 3M · 6M · 1Y · 5Y** buttons choose which trades count, by when they were opened (this run only). It groups your finished short options by what a reading was when you opened them, for example the 14,3,3 stochastic under 20, between 20 and 80, or over 80. Tabs switch between the four stochastics, the VIX and Fear & Greed. For each group it shows:
 
 - **Trades** in the group, and the **win rate** (a positive result).
 - **Average % of premium kept** on the option.

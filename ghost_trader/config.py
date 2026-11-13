@@ -19,6 +19,8 @@ DEFAULTS = {
     "ind_alerts": [],        # indicator alert rules (see alerts.py)
     "auto_refresh": 10,      # minutes between quote refreshes while the market is open; 0 = off
     "eod_summary": True,     # end-of-day summary notification at 3:30 PM CT
+    "ind_ranges": {"px": "3M", "st": "3M", "mood": "3M"},  # Indicators range per chart group
+    "out_range": "3M",       # Performance → readings vs. outcomes range
 }
 
 

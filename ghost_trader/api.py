@@ -35,6 +35,7 @@ class App:
         self.quotes = Quotes(self.db, self.provider, self.rates)
         self.ind = indicators.Indicators(self.provider)
         self.ind.on_refresh = self._check_alerts
+        self._warnings_read = False
         self.startup = Startup(self)
         self.data_asof = None
         self.loaded = threading.Event()
@@ -91,6 +92,7 @@ class App:
     def api_boot(self):
         return {"version": __version__, "demo": self.demo, "theme": self.settings.get("theme"),
                 "auto_refresh": self.settings.get("auto_refresh"),
+                "ind_ranges": self.settings.get("ind_ranges"), "out_range": self.settings.get("out_range"),
                 "provider": self.provider.name, "symbol": SYMBOL}
 
     def api_loaded(self):
@@ -149,8 +151,8 @@ class App:
         out = {"run": None, "price": S, "prev_close": u.get("prev_close"), "price_stale": u.get("stale", True),
                "market": self._market(), "version": __version__, "demo": self.demo,
                "data_asof": timeutil.fmt_ct(self.data_asof) if self.data_asof else None,
-               "errors": self.db.val("SELECT COUNT(*) FROM events WHERE (run_id=? OR run_id IS NULL) AND is_error=1",
-                                     (r["id"] if r else -1,), 0)}
+               "errors": self.db.val("SELECT COUNT(*) FROM events WHERE (run_id=? OR run_id IS NULL) AND is_error=1 "
+                                     "AND id>?", (r["id"] if r else -1, self._read_through()), 0)}
         if not r:
             return out
         b = self.led.breakdown(S or 0)
@@ -204,7 +206,7 @@ class App:
             "premium_c": self.led.premium_collected_c(), "interest_c": self.led.interest_earned_c(),
             "dividends_c": self.led.dividends_c(),
             "next_pay": timeutil.fmt_exp(nxt) if nxt else None,
-            "warnings": self.startup.warnings,
+            "warnings": [] if self._warnings_read else self.startup.warnings,
             "long_options": bool(self.settings.get("long_options")),
             "tags": self._all_tags(),
         })
@@ -438,18 +440,30 @@ class App:
         except Exception as e:  # noqa: BLE001
             log.exception("place failed")
             return {"error": f"The trade wasn't placed: {e}"}
-        self._stamp_readings(res.get("event_id"))
+        extra = None
+        if o.get("action") == "sell_to_open" and q:
+            try:
+                dte = (dt.date.fromisoformat(o["expiry"]) - timeutil.today_ct()).days
+                ch = self._chances(o["type"], self.price(), float(o["strike"]), float(o["price"]), dte, q.get("iv"),
+                                   self.rates.for_day(timeutil.today_ct()))
+                extra = {"chances": ch} if ch else None
+            except Exception:  # noqa: BLE001
+                log.exception("chances at open")
+        self._stamp_readings(res.get("event_id"), extra)
         return {"ok": True, **res}
 
-    def _stamp_readings(self, event_id):
-        """Save the current indicator readings with a trade. Never blocks the trade; skipped if nothing is available."""
+    def _stamp_readings(self, event_id, extra=None):
+        """Save the current indicator readings (and, for opens, the chances) with a trade. Never blocks the trade;
+        skipped if nothing is available."""
         if not event_id:
             return
         try:
             if self.ind.stale(ttl=30 * 60):
                 self.ind.warm()
                 self.ind.wait_warm(12)
-            snap = self.ind.snapshot()
+            snap = self.ind.snapshot() or ({"asof": timeutil.iso()} if extra else None)
+            if snap and extra:
+                snap.update(extra)
             if snap:
                 with self.db.tx():
                     self.db.x("INSERT OR REPLACE INTO trade_readings(event_id,asof,data) VALUES(?,?,?)",
@@ -471,9 +485,22 @@ class App:
             out.append({"when": f["d"], "day": f["day"], "label": ACTION_WORDS.get(act, "Trade"), **json.loads(e[3])})
         return out
 
+    # ------------------------------------------------------------------ history badge
+    def _read_through(self):
+        return int(self.db.val("SELECT value FROM meta WHERE key='errors_read_through'") or 0)
+
+    def api_mark_read(self):
+        """Clear the History badge (errors up to now) and hide this session's startup-warning banner."""
+        top = self.db.val("SELECT MAX(id) FROM events WHERE is_error=1 OR is_warning=1", default=0)
+        with self.db.tx():
+            self.db.x("INSERT OR REPLACE INTO meta(key,value) VALUES('errors_read_through',?)", (str(top),))
+        self._warnings_read = True
+        return {"ok": True}
+
     # ------------------------------------------------------------------ indicators
-    def api_indicators(self, range="3M", refresh=False):
-        months = {"3M": 3, "6M": 6, "1Y": 12, "2Y": 24}.get(range, 3)
+    def api_indicators(self, range="5Y", refresh=False):
+        """Five years of everything; each chart group on the tab slices its own range."""
+        months = 60
         if refresh:
             self.ind.refresh(force=True)
         elif self.ind.stale():
@@ -481,7 +508,7 @@ class App:
             if self.ind.stale():
                 self.ind.refresh()
         v = self.ind.view(months)
-        v["range"] = range if range in ("3M", "6M", "1Y", "2Y") else "3M"
+        v["range"] = "5Y"
         for st in v["status"].values():
             if st["at"]:
                 st["at_txt"] = timeutil.fmt_ct(st["at"], with_date=True)
@@ -507,7 +534,21 @@ class App:
         sign = 1 if p["side"] == "short" else -1
         pnl = cents((p["open_price"] - q["mid"]) * 100 * p["open_qty"]) * sign if q else None
         prem = cents(p["open_price"]) * 100 * p["open_qty"]
-        return {**_pubpos(p), "readings": self._position_readings(p["id"]), "quote": q, "pnl_c": pnl, "pnl_pct": pnl / prem if (pnl is not None and prem) else None,
+        ch_now = ch_open = ret = ann = days = None
+        if p["side"] == "short":
+            ch_now = self._chances(p["type"], S, p["strike"], p["open_price"], dte, (q or {}).get("iv"), rate)
+            first = self.db.one("SELECT r.data FROM events e JOIN trade_readings r ON r.event_id=e.id WHERE "
+                                "e.position_id=? AND e.kind='Trade' ORDER BY e.ts, e.id LIMIT 1", (p["id"],))
+            ch_open = json.loads(first[0]).get("chances") if first else None
+            prem_d = p["open_price"] * 100 * p["open_qty"]
+            base = coll / 100 if p["type"] == "put" else (S or 0) * 100 * p["open_qty"]
+            held = (timeutil.today_ct() - timeutil.parse(p["opened_at"]).astimezone(timeutil.CT).date()).days
+            days = max(held + max(dte, 0), 1)
+            if base:
+                ret = (prem_d + intr_full(coll, rate, days)) / base if p["type"] == "put" else prem_d / base
+                ann = ret * 365 / days
+        return {**_pubpos(p), "readings": self._position_readings(p["id"]), "chances": ch_now, "chances_open": ch_open,
+                "ret": ret, "ann": ann, "days_total": days, "quote": q, "pnl_c": pnl, "pnl_pct": pnl / prem if (pnl is not None and prem) else None,
                 "premium_c": prem, "interest_c": cents(coll / 100 * rate / 100 * max(dte, 0) / 365), "dte": dte,
                 "price": S, "dist": (S - p["strike"]) / p["strike"] if S else None,
                 "otm": (S > p["strike"]) if p["type"] == "put" else (S < p["strike"])}
@@ -815,10 +856,19 @@ class App:
             if v not in (0, 5, 10, 15):
                 return {"error": "Auto-refresh can be off, 5, 10 or 15 minutes."}
             kw["auto_refresh"] = v
+        RANGES = ("14D", "1M", "3M", "6M", "1Y", "5Y")
+        if "ind_ranges" in kw:
+            cur = dict(self.settings.get("ind_ranges") or {})
+            for g, v in (kw["ind_ranges"] or {}).items():
+                if g in ("px", "st", "mood") and v in RANGES:
+                    cur[g] = v
+            kw["ind_ranges"] = cur
+        if "out_range" in kw and kw["out_range"] not in RANGES:
+            return {"error": "Unknown range."}
         if "eod_summary" in kw:
             kw["eod_summary"] = bool(kw["eod_summary"])
         self.settings.update(**kw)
-        changed = [k for k in kw if old.get(k) != self.settings.get(k) and k not in ("chain_exp", "chain_view", "theme")]
+        changed = [k for k in kw if old.get(k) != self.settings.get(k) and k not in ("chain_exp", "chain_view", "theme", "ind_ranges", "out_range")]
         if changed and self.led.run():
             nice = {"av_key": "Alpha Vantage key", "manual_rate": "manual rate", "haircut": "haircut",
                     "long_options": "buying options to open"}
@@ -1055,9 +1105,12 @@ class App:
                       (56, 76, "Greed (56–75)"), (76, None, "Extreme greed (76–100)")]),
     }
 
-    def api_outcomes(self, by="stoch14"):
+    RANGE_DAYS = {"14D": 14, "1M": 31, "3M": 92, "6M": 183, "1Y": 366, "5Y": 1827}
+
+    def api_outcomes(self, by="stoch14", range=None):
         """Finished short options grouped by a reading saved when they were opened: win rate, premium kept, results."""
         key, bands = self.OUTCOME_GROUPS.get(by, self.OUTCOME_GROUPS["stoch14"])
+        rng = range if range in self.RANGE_DAYS else (self.settings.get("out_range") or "3M")
         r = self.led.run()
         rows = []
         if r:
@@ -1065,7 +1118,8 @@ class App:
                 "SELECT p.*, rd.data AS rdata FROM positions p "
                 "JOIN events e ON e.position_id=p.id AND e.kind='Trade' AND e.data LIKE '%\"sell_to_open\"%' "
                 "JOIN trade_readings rd ON rd.event_id=e.id "
-                "WHERE p.run_id=? AND p.side='short' AND p.status!='open' GROUP BY p.id", (r["id"],))
+                "WHERE p.run_id=? AND p.side='short' AND p.status!='open' AND p.opened_at>=? GROUP BY p.id",
+                (r["id"], timeutil.iso(timeutil.now() - dt.timedelta(days=self.RANGE_DAYS.get(rng, 92)))))
         groups = [{"label": lab, "n": 0, "wins": 0, "expired": 0, "assigned": 0, "kept": [], "result_c": 0, "ids": []}
                   for _, _, lab in bands]
         unread = 0
@@ -1095,7 +1149,7 @@ class App:
             out.append({"label": g["label"], "n": n, "win_rate": g["wins"] / n if n else None,
                         "kept": sum(g["kept"]) / n if n else None, "expired": g["expired"], "assigned": g["assigned"],
                         "avg_result_c": round(g["result_c"] / n) if n else None, "ids": g["ids"]})
-        return {"by": by, "groups": out, "total": len(rows) - unread, "without": unread,
+        return {"by": by, "range": rng, "groups": out, "total": len(rows) - unread, "without": unread,
                 "options": [["stoch14", "Stochastic 14,3,3"], ["stoch30", "30-day"], ["stoch60", "60-day"],
                             ["stoch180", "180-day"], ["vix", "VIX"], ["fg", "Fear & Greed"]]}
 
@@ -1117,6 +1171,11 @@ def _days(a, b):
 
 ACTION_WORDS = {"sell_to_open": "Opened", "buy_to_open": "Opened", "buy_to_close": "Closed", "sell_to_close": "Closed",
                 "buy_shares": "Bought shares", "sell_shares": "Sold shares"}
+
+
+def intr_full(coll_c, rate, days):
+    """Interest on a put's collateral over its whole life, in dollars (used for its return if it expires worthless)."""
+    return coll_c / 100 * (rate or 0) / 100 * days / 365
 
 
 def _pubpos(p):

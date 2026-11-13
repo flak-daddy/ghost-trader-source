@@ -90,7 +90,7 @@ def test_readings_stamped_on_trades(home):
         time.sleep(0.05)
     assert a.api_start_run(cash="$100,000.00")["ok"]
     v = a.api_indicators(range="6M")
-    assert v["range"] == "6M" and v["days"]
+    assert v["range"] == "5Y" and len(v["days"]) > 1200   # five years; each chart group slices its own range
     c = a.api_chain()
     o = {"action": "sell_to_open", "type": "put", "expiry": c["expiry"], "strike": float(round(c["price"]) - 5), "qty": 1}
     t = a.api_ticket(o)
@@ -119,5 +119,6 @@ def test_trade_still_places_without_readings(home):
     c = a.api_chain()
     o = {"action": "sell_to_open", "type": "put", "expiry": c["expiry"], "strike": float(round(c["price"]) - 5), "qty": 1}
     r = a.api_place({**o, "price": a.api_ticket(o)["default_fill"]})
-    assert r["ok"] and a._readings(r["event_id"]) is None
+    rd = a._readings(r["event_id"])
+    assert r["ok"] and rd.get("stoch14_k") is None and rd.get("vix") is None and rd["chances"]["worthless"] > 0
     assert json.loads(json.dumps(a.api_indicators()))["status"]["tqqq"]["ok"] is False

@@ -40,7 +40,7 @@ async function api(name, args = {}) {
 /* ---------- state ---------- */
 let st = null, boot = {};
 let ui = {tab: "Portfolio", pfMode: null, flashPos: null, chainExp: null, chainView: "both", flashStrike: null,
-  hFilter: "All", hTag: null, hDay: null, hEvent: null, hExpand: null, calMonth: null, lot: null, lotEvent: null, perfDay: null, pin: null, chartTable: false, theme: "system", indN: "14", indRange: "3M", indTable: false};
+  hFilter: "All", hTag: null, hDay: null, hEvent: null, hExpand: null, calMonth: null, lot: null, lotEvent: null, perfDay: null, pin: null, chartTable: false, theme: "system", indN: "14", indRanges: {px: "3M", st: "3M", mood: "3M"}, outRange: "3M", indTable: false};
 const S = () => (st && st.price) || 0;
 const label = p => p.label;
 
@@ -55,7 +55,7 @@ matchMedia("(prefers-color-scheme: light)").addEventListener("change", applyThem
 const TABS = ["Portfolio", "Chain", "Indicators", "History", "Performance", "Settings", "Help"];
 function renderHeader() {
   const errs = st ? st.errors : 0;
-  $("#tabs").innerHTML = TABS.map(t => `<button class="${ui.tab === t ? "on" : ""}" data-tab="${t}">${t}${t === "History" && errs ? `<span class=badge>${errs}</span>` : ""}</button>`).join("");
+  $("#tabs").innerHTML = TABS.map(t => `<button class="${ui.tab === t ? "on" : ""}" data-tab="${t}"${t === "History" && errs ? ` data-tip="Right-click: mark all as read"` : ""}>${t}${t === "History" && errs ? `<span class=badge>${errs}</span>` : ""}</button>`).join("");
   if (!st || !st.run) { $("#acct").innerHTML = st ? `<div><small>Data as of</small><span>${esc(st.data_asof || "—")}</span> <span class=pill>${esc(st.market.label)}</span></div>` : ""; return; }
   const b = st.bal;
   $("#acct").innerHTML = `
@@ -108,9 +108,8 @@ async function go(target) {
   else if (a === "perf") { ui.tab = "Performance"; ui.perfDay = b; }
   else if (a === "report") { showReport(); return; }
   else if (a === "help") { ui.tab = "Help"; ui.helpAt = b || null; }
-  else if (a === "ind") { ui.tab = "Indicators"; if (b) { ui.indPin = b; ui.indFlash = true;
-    const back = (Date.now() - new Date(b + "T12:00:00")) / 864e5, need = back <= 88 ? "3M" : back <= 180 ? "6M" : back <= 362 ? "1Y" : "2Y";
-    if (["3M", "6M", "1Y", "2Y"].indexOf(need) > ["3M", "6M", "1Y", "2Y"].indexOf(ui.indRange)) ui.indRange = need; } }
+  else if (a === "ind") { ui.tab = "Indicators"; if (b) { ui.indPin = b; ui.indFlash = true; const need = rangeFor(b);
+    ui.indRanges = Object.fromEntries(Object.entries(ui.indRanges).map(([g, r]) => [g, RDAYS[need] > RDAYS[r] ? need : r])); } }
   else if (a === "poshist") { ui.tab = "History"; ui.hFilter = hKeep.f; ui.hTag = hKeep.t; ui.hEvent = null;
     closeOverlay(); closeDrawer(); await render(); openPosPanel(+b); return; }
   closeOverlay(); closeDrawer(); await render(); scrollTo(0, 0);
@@ -122,7 +121,18 @@ document.addEventListener("dblclick", e => {
   const el = e.target.closest("[data-go]"); if (!el) return;
   e.preventDefault(); getSelection().removeAllRanges(); go(el.dataset.go);
 });
+document.addEventListener("contextmenu", e => {
+  const t = e.target.closest('[data-tab="History"]');
+  closeCtx(); if (!t) return;
+  e.preventDefault();
+  const m = document.createElement("div"); m.className = "ctxmenu"; m.id = "ctxmenu";
+  m.innerHTML = `<button id=ctxRead>${I("check")} Mark all as read</button>`;
+  m.style.left = e.clientX + "px"; m.style.top = e.clientY + "px"; document.body.appendChild(m);
+  $("#ctxRead").onclick = async () => { closeCtx(); await api("mark_read"); await refreshState(); renderHeader(); if (ui.tab === "Portfolio") render(); toast(`${I("check")} Marked as read`, 1500); };
+});
+function closeCtx() { const m = $("#ctxmenu"); if (m) m.remove(); }
 document.addEventListener("click", e => {
+  if (!e.target.closest("#ctxmenu")) closeCtx();
   const t = e.target.closest("[data-tab]");
   if (t) { ui.tab = t.dataset.tab; resetMarks(); closeDrawer(); render(); }
 });
@@ -130,6 +140,7 @@ document.addEventListener("keydown", e => {
   if (!st) return;
   if (e.target.matches("input,select,textarea")) { if (e.key === "Escape") e.target.blur(); else return; }
   if ($("#splash").innerHTML) return;
+  if (e.key === "Escape" && $("#ctxmenu")) { closeCtx(); return; }
   if (e.key === "Escape") { if ($("#overlay").innerHTML) closeOverlay(); else if ($("#drawer").innerHTML) { if (tk) cancelTicket(); else closeDrawer(); } else if (ui.pin != null) { ui.pin = null; render(); } else if (ui.indPin && ui.tab === "Indicators") { ui.indPin = null; render(); } else if (ui.lot) { ui.lot = null; render(); } }
   if (/^[1-7]$/.test(e.key) && !$("#overlay").innerHTML && st.run) { ui.tab = TABS[+e.key - 1]; resetMarks(); closeDrawer(); render(); }
   if (e.key === "Enter" && $("#confirmBtn") && !$("#confirmBtn").disabled) $("#confirmBtn").click();
@@ -235,7 +246,7 @@ async function renderChain() {
   const head = view === "both" ? `<tr><th colspan=5>CALLS</th><th class=mid></th><th colspan=5>PUTS</th></tr><tr><th>Vol</th><th>Delta</th><th>Bid</th><th>Ask</th><th>Mid</th><th class=mid>Strike</th><th>Mid</th><th>Ask</th><th>Bid</th><th>Delta</th><th>Vol</th></tr>`
     : `<tr><th class=mid>Strike</th><th>Bid</th><th>Ask</th><th>Mid</th><th>Delta</th><th>Vol</th></tr>`;
   const rows = ks.map(r => { const K = r.k, hs = held[K] || [];
-    const dot = hs.length ? `<span class=held data-go="pos:${hs[0].id}" data-tip="Double-click: go to your ${esc(hs[0].exp_label)} ${kTxt(K)} ${hs[0].type === "put" ? "Put" : "Call"} (${plural(hs[0].open_qty, "contract")})">●</span>` : "";
+    const dot = hs.length ? `<span class=held data-go="chainpos:${hs[0].id}" data-tip="Double-click: details for your ${esc(hs[0].exp_label)} ${kTxt(K)} ${hs[0].type === "put" ? "Put" : "Call"} (${plural(hs[0].open_qty, "contract")})">●</span>` : "";
     const cls = ui.flashStrike === K ? "flash" : "";
     if (view === "both") return `<tr class="${cls}" id="k${K}">${cell(r.call, "call", K, "c")}<td class=mid>${K}${dot}</td>${cell(r.put, "put", K, "p")}</tr>`;
     const t = view === "calls" ? "call" : "put", q = r[t];
@@ -418,112 +429,125 @@ function ichart(c, N, xlab) {
   if (xlab && N > 1) { const tk = [...new Set([0, Math.round((N - 1) / 4), Math.round((N - 1) / 2), Math.round(3 * (N - 1) / 4), N - 1])];
     xl = tk.map(i => `<text x=${X(i)} y=${H - 6} fill="var(--dim)" font-size=11 text-anchor=${i === 0 ? "start" : i === N - 1 ? "end" : "middle"}>${fmtDay(xlab[i])}</text>`).join(""); }
   return `<div class=ichart><div class=ihead><b>${c.title}</b>${c.ctl || ""}${c.legend || ""}<span class=meta>${c.sub || ""}</span></div>
-    <svg viewBox="0 0 ${IW} ${H}" width="100%" data-t=${T} data-b=${H - B}>${g}${lines}${endl}${xl}<line class=xh x1=0 x2=0 y1=${T} y2=${H - B} stroke="var(--dim)" stroke-width=1 style="display:none"/></svg></div>`;
+    <svg viewBox="0 0 ${IW} ${H}" width="100%" data-g="${c.g || ""}" data-t=${T} data-b=${H - B}>${g}${lines}${endl}${xl}<line class=xh x1=0 x2=0 y1=${T} y2=${H - B} stroke="var(--dim)" stroke-width=1 style="display:none"/></svg></div>`;
 }
-function niceTicks(lo, hi, n) { const st = niceStep(hi - lo, n), out = []; for (let v = Math.ceil(lo / st) * st; v <= hi + 1e-9; v += st) out.push(+v.toFixed(6)); return out; }
+function niceTicks(lo, hi, n) { const st = niceStep(hi - lo, n), out = []; const a = Math.floor(lo / st + 1e-9) * st, b = Math.ceil(hi / st - 1e-9) * st; for (let v = a; v <= b + 1e-9; v += st) out.push(+v.toFixed(6)); return out; }
+const RANGES = ["14D", "1M", "3M", "6M", "1Y", "5Y"], RDAYS = {"14D": 14, "1M": 31, "3M": 92, "6M": 183, "1Y": 366, "5Y": 1827};
+const isoMinus = n => { const t = new Date(); t.setDate(t.getDate() - n); return t.toISOString().slice(0, 10); };
+function fgTint(sc) {
+  if (sc == null) return null;
+  const t = (sc - 50) / 50, k = Math.pow(Math.abs(t), 1.3), c = t < 0 ? "#7a3fe0" : "#a8c93a";
+  return {bg: `color-mix(in srgb, ${c} ${Math.round(k * 11)}%, var(--panel))`, bd: `color-mix(in srgb, ${c} ${Math.round(k * 40)}%, var(--line))`};
+}
+const rangeFor = day => { const back = (Date.now() - new Date(day + "T12:00:00")) / 864e5; return RANGES.find(r => RDAYS[r] >= back + 1) || "5Y"; };
 async function renderIndicators(refresh) {
-  if (!indData || refresh || indData.range !== ui.indRange) {
-    if (!indData || indData.range !== ui.indRange) $("#main").innerHTML = `<div class=meta style="padding:20px 0"><span class=spin>${I("spin")}</span> Getting TQQQ, the VIX and Fear & Greed…</div>`;
-    const d = await api("indicators", {range: ui.indRange, refresh: !!refresh});
-    if (d.error) { $("#main").innerHTML = `<div class="alert e"><span class=ic>${I("alert")}</span><span>${esc(d.error)}</span></div>`; return; }
-    indData = d;
+  if (!indData || refresh) {
+    if (!indData) $("#main").innerHTML = `<div class=meta style="padding:20px 0"><span class=spin>${I("spin")}</span> Getting TQQQ, the VIX and Fear & Greed…</div>`;
+    const dd = await api("indicators", {refresh: !!refresh});
+    if (dd.error) { $("#main").innerHTML = `<div class="alert e"><span class=ic>${I("alert")}</span><span>${esc(dd.error)}</span></div>`; return; }
+    indData = dd;
   }
   if (ui.tab !== "Indicators") return;
-  const d = indData, nw = d.now, n = ui.indN, N = d.days.length, sel = d.stoch[n] || {k: [], d: null};
+  const d = indData, nw = d.now, n = ui.indN, NN = d.days.length, sel = d.stoch[n] || {k: [], d: null};
+  const R = ui.indRanges;
+  const startIdx = r => { const cut = isoMinus(RDAYS[r]); const i = d.days.findIndex(x => x >= cut); return i < 0 ? NN : i; };
+  const G = {px: startIdx(R.px), st: startIdx(R.st), mood: startIdx(R.mood)};
+  const cnt = g => NN - G[g], sl = (a, g) => a ? a.slice(G[g]) : null;
   const names = {tqqq: "TQQQ prices (Yahoo)", vix: "the VIX (Yahoo)", fg: "Fear & Greed (CNN)"};
   const alerts = Object.entries(d.status).filter(([, s]) => !s.ok).map(([k, s]) => `<div class="alert w"><span class=ic>${I("warn")}</span><span><b>Couldn't get ${names[k]}:</b> ${esc(s.error || "no data")}. ${s.at ? `Showing what was fetched ${esc(s.at_txt)}.` : "It'll show here once it's available."}${k === "fg" ? " CNN has no official feed, so its site changing can break this." : ""}</span></div>`).join("");
   const label = k => k === "14" ? "14,3,3" : k + "-day";
   const srows = d.lookbacks.map(String).map(k => { const c = nw.stoch[k] || {};
-    return `<tr class="click ${k === n ? "cur" : ""}" data-in="${k}"><td class=l>${label(k)}</td><td><b>${r0(c.k)}</b>${c.d != null ? `<span class=meta> / ${r0(c.d)}</span>` : ""}</td><td>${c.k != null && c.k_prev != null ? `<span class="${c.k >= c.k_prev ? "up" : "down"}">${c.k >= c.k_prev ? "▲" : "▼"}</span>` : ""}</td><td class="l meta">${zone(c.k)}</td></tr>`; }).join("");
-  const fg = nw.fg || {};
-  const cards = `<div class=cards style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+    return `<tr><td class=l>${label(k)}</td><td><b>${r0(c.k)}</b>${c.d != null ? `<span class=meta> / ${r0(c.d)}</span>` : ""}</td><td>${c.k != null && c.k_prev != null ? `<span class="${c.k >= c.k_prev ? "up" : "down"}">${c.k >= c.k_prev ? "▲" : "▼"}</span>` : ""}</td><td class="l meta">${zone(c.k)}</td></tr>`; }).join("");
+  const fg = nw.fg || {}, tint = fgTint(fg.score);
+  const cards = `<div class="cards itiles" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
     <div class=card><small>TQQQ</small><span class=big>${nw.price == null ? "—" : "$" + f2(nw.price)}</span><div class=meta>${chg(nw.price, nw.prev)} vs. prior day · bars through ${nw.bars_through ? esc(fmtDay(nw.bars_through)) : "—"}</div></div>
-    <div class=card><small>Stochastic (%K${nw.stoch["14"] && nw.stoch["14"].d != null ? " / %D" : ""})</small><table class="mini istoch"><tbody>${srows}</tbody></table></div>
-    <div class=card><small>VIX</small><span class=big>${nw.vix == null ? "—" : f2(nw.vix)}</span><div class=meta>${chg(nw.vix, nw.vix_prev)} vs. prior close${nw.vix_lo != null ? ` · 1-year range ${f2(nw.vix_lo)}–${f2(nw.vix_hi)}` : ""}</div></div>
-    <div class=card><small>Fear &amp; Greed</small><span class=big>${fg.score == null ? "—" : Math.round(fg.score)}</span> <span class=pill>${esc(fg.rating || fgName(fg.score) || "unavailable")}</span>
+    <div class="card stile"><small>Stochastic (%K${nw.stoch["14"] && nw.stoch["14"].d != null ? " / %D" : ""})</small><table class="mini istoch"><tbody>${srows}</tbody></table></div>
+    <div class=card><div class=thead>VIX = ${nw.vix == null ? "—" : f2(nw.vix)}</div><div class=meta>${chg(nw.vix, nw.vix_prev)} vs. prior close${nw.vix_lo != null ? ` · 1-year range ${f2(nw.vix_lo)}–${f2(nw.vix_hi)}` : ""}</div></div>
+    <div class=card ${tint ? `style="background:${tint.bg};border-color:${tint.bd}"` : ""}><div class=thead>Fear &amp; Greed ${fg.score == null ? "unavailable" : `is at ${Math.round(fg.score)} <span class=pill>${esc(fg.rating || fgName(fg.score))}</span>`}</div>
       <div class=meta>${[["prior close", fg.previous_close], ["1 week", fg.week_ago], ["1 month", fg.month_ago], ["1 year", fg.year_ago]].filter(x => x[1] != null).map(([a, v]) => `${a} ${Math.round(v)}`).join(" · ")}</div></div></div>`;
   const seg = (items, cur, attr) => `<span class=seg>${items.map(([v, t]) => `<button class="btn small ${v === cur ? "on" : ""}" ${attr}="${v}">${t}</button>`).join("")}</span>`;
-  const stochTabs = `<div class=stabs role=tablist>${d.lookbacks.map(String).map(k => `<button role=tab class="${k === n ? "on" : ""}" data-in="${k}">${label(k)}</button>`).join("")}</div>`;
-  const bar = `<div class=bar style="margin-bottom:10px"><span class=meta>Every chart and the table cover the same dates</span>
-    <span style="margin-left:auto;display:flex;gap:8px;align-items:center"><span class=meta>Range</span>${seg([["3M", "3M"], ["6M", "6M"], ["1Y", "1Y"], ["2Y", "2Y"]], ui.indRange, "data-ir")}
+  const rseg = g => `<span class="seg irng">${RANGES.map(r => `<button class="btn small ${R[g] === r ? "on" : ""}" data-rg="${g}:${r}">${r}</button>`).join("")}</span>`;
+  const stochTabs = `<div class=stabs role=tablist>${d.lookbacks.map(String).map(k => `<button role=tab class="${k === n ? "on" : ""}" data-in="${k}">${label(k)}</button>`).join("")}<span class=srng>${rseg(ui.indTable ? "px" : "st")}</span></div>`;
+  const bar = `<div class=bar style="margin-bottom:10px;justify-content:flex-end">
     ${seg([["chart", "Chart"], ["table", "Table"]], ui.indTable ? "table" : "chart", "data-iv")}
-    <button class="btn small" id=indRef>${I("refresh")} Refresh</button></span></div>`;
+    <button class="btn small" id=indRef>${I("refresh")} Refresh</button></div>`;
   let body;
-  if (!N) body = `<div class=empty>No TQQQ price history yet.</div>`;
+  if (!NN) body = `<div class=empty>No TQQQ price history yet.</div>`;
   else if (ui.indTable) {
-    const rows = d.days.map((day, i) => `<tr><td class=l>${esc(fmtDay(day))}</td><td>${f2(d.close[i])}</td><td>${r0(sel.k[i])}</td>${sel.d ? `<td>${r0(sel.d[i])}</td>` : ""}<td>${d.vix[i] == null ? "—" : f2(d.vix[i])}</td><td>${r0(d.fg[i])}</td><td class="l meta">${d.fg[i] == null ? "" : fgName(d.fg[i])}</td></tr>`).reverse().join("");
-    body = `<div class="stochpanel tblmode" style="margin-top:12px">${stochTabs}<span class=meta style="padding:0 10px">picks the stochastic column</span></div><div class=chainbox style="max-height:60vh"><table class=both><thead><tr><th class=l>Date</th><th>TQQQ close</th><th>Stoch ${label(n)} %K</th>${sel.d ? "<th>%D</th>" : ""}<th>VIX</th><th>Fear &amp; Greed</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    const i0 = G.px;
+    const rows = d.days.slice(i0).map((day, j) => { const i = i0 + j; return `<tr><td class=l>${esc(fmtDay(day))}</td><td>${f2(d.close[i])}</td><td>${r0(sel.k[i])}</td>${sel.d ? `<td>${r0(sel.d[i])}</td>` : ""}<td>${d.vix[i] == null ? "—" : f2(d.vix[i])}</td><td>${r0(d.fg[i])}</td><td class="l meta">${d.fg[i] == null ? "" : fgName(d.fg[i])}</td></tr>`; }).reverse().join("");
+    body = `<div class="stochpanel tblmode" style="margin-top:12px">${stochTabs}</div><div class=meta style="margin:6px 2px">The tabs pick the stochastic column; the range picks the dates.</div><div class=chainbox style="max-height:60vh"><table class=both><thead><tr><th class=l>Date</th><th>TQQQ close</th><th>Stoch ${label(n)} %K</th>${sel.d ? "<th>%D</th>" : ""}<th>VIX</th><th>Fear &amp; Greed</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
   } else {
-    const cl = d.close.filter(x => x != null), clo = Math.min(...cl), chi = Math.max(...cl), cp = Math.max((chi - clo) * .08, .5);
-    const vx = d.vix.filter(x => x != null), vlo = vx.length ? Math.min(...vx) : 10, vhi = vx.length ? Math.max(...vx) : 30, vp = Math.max((vhi - vlo) * .1, .5);
+    const cl = sl(d.close, "px").filter(x => x != null), clo = Math.min(...cl), chi = Math.max(...cl), cp = Math.max((chi - clo) * .06, .3);
+    const vx = sl(d.vix, "mood").filter(x => x != null), vlo = vx.length ? Math.min(...vx) : 10, vhi = vx.length ? Math.max(...vx) : 30, vp = Math.max((vhi - vlo) * .08, .5);
     const ct = niceTicks(clo - cp, chi + cp, 4), vt = niceTicks(Math.max(0, vlo - vp), vhi + vp, 4);
     const leg = sel.d ? `<span class=ileg><svg width=22 height=8><line x1=0 x2=22 y1=4 y2=4 stroke="var(--s1)" stroke-width=2 /></svg>%K <svg width=22 height=8><line x1=0 x2=22 y1=4 y2=4 stroke="var(--s2)" stroke-width=2 stroke-dasharray="5 4"/></svg>%D</span>` : "";
+    const sk = sl(sel.k, "st"), sd = sl(sel.d, "st");
     body = `<div class=ichartbox id=ichartbox style="position:relative;margin-top:12px">
       <div class="card igroup"><div class=gtitle>TQQQ</div>
-      ${ichart({title: "Price", sub: "daily close", h: 190, lo: ct[0], hi: ct[ct.length - 1], ticks: ct, tfmt: t => "$" + t, efmt: v => "$" + v.toFixed(2), series: [{v: d.close, color: "var(--s1)"}]}, N)}
+      ${ichart({g: "px", title: "Price", ctl: rseg("px"), sub: "daily close", h: 190, lo: ct[0], hi: ct[ct.length - 1], ticks: ct, tfmt: t => "$" + t, efmt: v => "$" + v.toFixed(2), series: [{v: sl(d.close, "px"), color: "var(--s1)"}]}, cnt("px"), sl(d.days, "px"))}
       <div class=stochpanel>${stochTabs}
-      ${ichart({title: "Stochastic", legend: leg, sub: sel.d ? "%K smoothed 3 · %D = 3-day average of %K · 80 / 20 lines" : `raw %K over ${n} trading days · 80 / 20 lines`, h: 170, lo: 0, hi: 100, ticks: [0, 20, 50, 80, 100], refs: [{y: 80}, {y: 20}], efmt: v => Math.round(v), series: sel.d ? [{v: sel.k, color: "var(--s1)", name: "%K"}, {v: sel.d, color: "var(--s2)", dash: true, name: "%D"}] : [{v: sel.k, color: "var(--s1)"}]}, N, d.days)}</div></div>
-      <div class="card igroup" style="margin-top:12px"><div class=gtitle>Market mood</div>
-      ${ichart({title: "VIX", sub: "S&P 500 expected volatility, daily close", h: 150, lo: vt[0], hi: vt[vt.length - 1], ticks: vt, efmt: v => v.toFixed(2), series: [{v: d.vix, color: "var(--s1)"}]}, N)}
-      ${ichart({title: "Fear & Greed", sub: "CNN, 0–100", h: 170, lo: 0, hi: 100, ticks: [0, 25, 45, 55, 75, 100], bands: FG_BANDS, series: [{v: d.fg, color: "var(--s1)"}]}, N, d.days)}</div>
+      ${ichart({g: "st", title: "Stochastic", legend: leg, sub: sel.d ? "%K smoothed 3 · %D = 3-day average of %K · 80 / 20 lines" : `raw %K over ${n} trading days · 80 / 20 lines`, h: 170, lo: 0, hi: 100, ticks: [0, 20, 50, 80, 100], refs: [{y: 80}, {y: 20}], efmt: v => Math.round(v), series: sel.d ? [{v: sk, color: "var(--s1)", name: "%K"}, {v: sd, color: "var(--s2)", dash: true, name: "%D"}] : [{v: sk, color: "var(--s1)"}]}, cnt("st"), sl(d.days, "st"))}</div></div>
+      <div class="card igroup" style="margin-top:12px"><div class="gtitle gflex">Market mood${rseg("mood")}</div>
+      ${ichart({g: "mood", title: "VIX", sub: "S&P 500 expected volatility, daily close", h: 150, lo: vt[0], hi: vt[vt.length - 1], ticks: vt, efmt: v => v.toFixed(2), series: [{v: sl(d.vix, "mood"), color: "var(--s1)"}]}, cnt("mood"))}
+      ${ichart({g: "mood", title: "Fear & Greed", sub: "CNN, 0–100", h: 170, lo: 0, hi: 100, ticks: [0, 25, 45, 55, 75, 100], bands: FG_BANDS, series: [{v: sl(d.fg, "mood"), color: "var(--s1)"}]}, cnt("mood"), sl(d.days, "mood"))}</div>
       <div class=itip id=itip></div></div>`;
   }
   $("#main").innerHTML = `${alerts}${bar}${cards}${body}
     <div class=meta style="margin-top:8px">TQQQ and the VIX from Yahoo (~15 min delayed) · Fear &amp; Greed from CNN's site (unofficial) · readings are saved with each trade you place · <span class="lnk helplink" style="margin:0" onclick="go('help:indicators')">How these work ↗</span></div>`;
   $$("[data-in]").forEach(b => b.onclick = () => { ui.indN = b.dataset.in; renderIndicators(); });
-  $$("[data-ir]").forEach(b => b.onclick = () => { ui.indRange = b.dataset.ir; renderIndicators(); });
+  $$("[data-rg]").forEach(b => b.onclick = () => { const [g, r] = b.dataset.rg.split(":"); ui.indRanges = {...ui.indRanges, [g]: r};
+    api("settings_set", {ind_ranges: {[g]: r}}); renderIndicators(); });
   $$("[data-iv]").forEach(b => b.onclick = () => { ui.indTable = b.dataset.iv === "table"; renderIndicators(); });
   $("#indRef").onclick = async () => { $("#indRef").innerHTML = `<span class=spin>${I("spin")}</span> Refreshing…`; await renderIndicators(true); };
   const box = $("#ichartbox"); if (!box) return;
   const tip = $("#itip");
-  const idxOfDay = day => { let j = -1; d.days.forEach((x, i) => { if (x <= day) j = i; }); return j; };
-  const xAt = i => IL + (N > 1 ? (IW - IL - IR) * i / (N - 1) : 0);
-  const iAt = e => { const svg = e.target.closest && e.target.closest(".ichart > svg"); if (!svg) return null;
-    const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) * IW / r.width;
-    return Math.max(0, Math.min(N - 1, Math.round((x - IL) / (IW - IL - IR) * (N - 1)))); };
+  const gidx = day => { let j = -1; d.days.forEach((x, i) => { if (x <= day) j = i; }); return j; };
+  const xAt = (i, m) => IL + (m > 1 ? (IW - IL - IR) * i / (m - 1) : 0);
+  const svgs = () => [...box.querySelectorAll(".ichart > svg")];
+  const hit = e => { const svg = e.target.closest && e.target.closest(".ichart > svg"); if (!svg) return null;
+    const g = svg.dataset.g, m = cnt(g), r = svg.getBoundingClientRect(), x = (e.clientX - r.left) * IW / r.width;
+    const li = Math.max(0, Math.min(m - 1, Math.round((x - IL) / (IW - IL - IR) * (m - 1))));
+    return {gi: G[g] + li, svg}; };
   const hide = () => { tip.style.display = "none"; $$(".xh").forEach(l => l.style.display = "none"); };
-  const showAt = (i, y, pinned) => {
-    const X = xAt(i);
-    $$(".xh").forEach(l => { l.setAttribute("x1", X); l.setAttribute("x2", X); l.style.display = ""; l.setAttribute("stroke", pinned ? "var(--warn)" : "var(--dim)"); l.setAttribute("stroke-dasharray", pinned ? "3 3" : ""); });
-    tip.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><b>${esc(fmtDay(d.days[i]))}</b>${pinned ? `<span class=ipx id=iUnpin title="Unpin (Esc)">${I("x")}</span>` : ""}</div>
-      <div class=row><span class=meta>TQQQ</span><span>$${f2(d.close[i])}</span></div>
-      <div class=row><span class=meta>Stoch ${label(n)}</span><span>${r0(sel.k[i])}${sel.d ? " / " + r0(sel.d[i]) : ""}</span></div>
-      <div class=row><span class=meta>VIX</span><span>${d.vix[i] == null ? "—" : f2(d.vix[i])}</span></div>
-      <div class=row><span class=meta>Fear &amp; Greed</span><span>${d.fg[i] == null ? "—" : Math.round(d.fg[i]) + " · " + fgName(d.fg[i])}</span></div>
+  const showAt = (gi, y, pinned, from) => {
+    svgs().forEach(sv => { const g = sv.dataset.g, li = gi - G[g], l = sv.querySelector(".xh");
+      if (li < 0 || li >= cnt(g)) { l.style.display = "none"; return; }
+      const X = xAt(li, cnt(g)); l.setAttribute("x1", X); l.setAttribute("x2", X); l.style.display = "";
+      l.setAttribute("stroke", pinned ? "var(--warn)" : "var(--dim)"); l.setAttribute("stroke-dasharray", pinned ? "3 3" : ""); });
+    tip.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><b>${esc(fmtDay(d.days[gi]))}</b>${pinned ? `<span class=ipx id=iUnpin title="Unpin (Esc)">${I("x")}</span>` : ""}</div>
+      <div class=row><span class=meta>TQQQ</span><span>$${f2(d.close[gi])}</span></div>
+      <div class=row><span class=meta>Stoch ${label(n)}</span><span>${r0(sel.k[gi])}${sel.d ? " / " + r0(sel.d[gi]) : ""}</span></div>
+      <div class=row><span class=meta>VIX</span><span>${d.vix[gi] == null ? "—" : f2(d.vix[gi])}</span></div>
+      <div class=row><span class=meta>Fear &amp; Greed</span><span>${d.fg[gi] == null ? "—" : Math.round(d.fg[gi]) + " · " + fgName(d.fg[gi])}</span></div>
       <div class="meta ifoot">${pinned ? "PINNED · " : "CLICK TO PIN · "}DOUBLE-CLICK: HISTORY FOR THIS DAY</div>`;
     tip.style.display = "block"; tip.classList.toggle("pinned", !!pinned);
-    const sv = box.querySelector(".ichart > svg").getBoundingClientRect(), br = box.getBoundingClientRect();
-    const px = (X / IW) * sv.width + sv.left - br.left;
+    const ref = from || svgs().find(sv => { const li = gi - G[sv.dataset.g]; return li >= 0 && li < cnt(sv.dataset.g); }) || svgs()[0];
+    const rr = ref.getBoundingClientRect(), br = box.getBoundingClientRect(), li = gi - G[ref.dataset.g];
+    const px = (xAt(li, cnt(ref.dataset.g)) / IW) * rr.width + rr.left - br.left;
     tip.style.left = (px > br.width - 230 ? px - tip.offsetWidth - 14 : px + 14) + "px";
-    tip.style.top = Math.max(8, y) + "px";
+    tip.style.top = Math.max(8, y ?? (rr.top - br.top + 30)) + "px";
     const u = $("#iUnpin"); if (u) u.onclick = ev => { ev.stopPropagation(); ui.indPin = null; hide(); };
   };
-  const pinned = () => ui.indPin ? idxOfDay(ui.indPin) : -1;
+  const pinned = () => ui.indPin ? gidx(ui.indPin) : -1;
   if (pinned() >= 0) {
-    const i = pinned();
-    if (ui.indFlash) { ui.indFlash = false; box.querySelectorAll(".ichart > svg").forEach(sv => { const B = +sv.dataset.b, T = +sv.dataset.t;
-      sv.insertAdjacentHTML("afterbegin", `<rect class=iflash x=${xAt(i) - 7} y=${T} width=14 height=${B - T} fill="var(--warn)" opacity=.22 />`); }); }
-    showAt(i, 60, true);
+    const gi = pinned();
+    if (ui.indFlash) { ui.indFlash = false; svgs().forEach(sv => { const g = sv.dataset.g, li = gi - G[g]; if (li < 0 || li >= cnt(g)) return;
+      sv.insertAdjacentHTML("afterbegin", `<rect class=iflash x=${xAt(li, cnt(g)) - 7} y=${+sv.dataset.t} width=14 height=${+sv.dataset.b - +sv.dataset.t} fill="var(--warn)" opacity=.22 />`); }); }
+    showAt(gi, null, true);
   } else if (ui.indPin) ui.indPin = null;
   box.addEventListener("mouseleave", () => { if (pinned() < 0) hide(); });
-  box.addEventListener("mousemove", e => {
-    if (pinned() >= 0) return;
-    const i = iAt(e); if (i == null) { hide(); return; }
-    showAt(i, e.clientY - box.getBoundingClientRect().top - 40, false);
-  });
+  box.addEventListener("mousemove", e => { if (pinned() >= 0) return; const h = hit(e); if (!h) { hide(); return; }
+    showAt(h.gi, e.clientY - box.getBoundingClientRect().top - 40, false, h.svg); });
   let clickT;
   box.addEventListener("click", e => {
-    if (e.target.closest("#iUnpin")) return;
-    const i = iAt(e); if (i == null) return;
+    if (e.target.closest("#iUnpin") || e.target.closest("button")) return;
+    const h = hit(e); if (!h) return;
     clearTimeout(clickT);
     if (e.detail !== 1) return;
-    clickT = setTimeout(() => { ui.indPin = d.days[i]; showAt(i, e.clientY - box.getBoundingClientRect().top - 40, true); }, 260);
+    clickT = setTimeout(() => { ui.indPin = d.days[h.gi]; showAt(h.gi, e.clientY - box.getBoundingClientRect().top - 40, true, h.svg); }, 260);
   });
-  box.addEventListener("dblclick", e => {
-    clearTimeout(clickT);
-    const i = iAt(e); if (i == null) return;
-    getSelection().removeAllRanges(); go("history:day:" + d.days[i]);
-  });
+  box.addEventListener("dblclick", e => { if (e.target.closest("button")) return; clearTimeout(clickT); const h = hit(e); if (!h) return; getSelection().removeAllRanges(); go("history:day:" + d.days[h.gi]); });
 }
 
 /* ---------- HELP ---------- */
@@ -575,6 +599,7 @@ async function openPosPanel(id) {
       <tr><td class=l>P&L if closed at the mark</td><td class="${p.pnl_c >= 0 ? "up" : "down"}">${p.pnl_c == null ? "—" : `${mc(p.pnl_c, true)} (${pct(p.pnl_pct)} of ${short ? "premium" : "cost"})`}</td></tr>
       ${short ? `<tr><td class=l>${p.type === "put" ? "Collateral" : "Covering"}</td><td>${p.type === "put" ? mc(p.collateral_c) : p.open_qty * 100 + " TQQQ shares"}</td></tr>` : ""}
       ${short && p.type === "put" ? `<tr><td class=l>Interest on collateral to expiry</td><td class=up>${mc(p.interest_c, true)}</td></tr>` : ""}
+      ${short && p.ret != null ? `<tr data-tip="${pct(p.ret, 2)} over the ${plural(p.days_total, "day")} from open to expiration (${p.type === "put" ? "premium + interest on the collateral, against the collateral" : "premium against the value of the shares covering it"}) ≈ ${pct(p.ann)} a year if repeated back-to-back. A comparison yardstick, not a forecast."><td class=l>Return if it expires worthless</td><td><b>${pct(p.ret, 2)}</b></td></tr>` : ""}
       <tr><td class=l>TQQQ vs. strike</td><td>${f2(p.price)} vs. ${kTxt(p.strike)} · ${Math.abs(p.dist * 100).toFixed(1)}% ${p.otm ? "out of" : "in"} the money</td></tr>
       <tr><td class=l>Days to expiration</td><td>${p.dte} <span class=meta>(${esc(p.exp_label)})</span></td></tr>
       <tr><td class=l>If it expires worthless</td><td>${short ? `keep ${mc(prem)}${p.type === "put" ? ", collateral released" : ", shares unlocked"}` : `lose the ${mc(prem)} paid`}</td></tr>
@@ -582,9 +607,11 @@ async function openPosPanel(id) {
     </tbody></table>
     ${p.note ? `<div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--panel2);font-size:13px"><span class=meta>Your note</span><br><i>“${esc(p.note)}”</i></div>` : ""}
     ${short && p.type === "put" && p.dist < 0.03 ? `<div class="alert w" style="margin-top:10px"><span class=ic>${I("warn")}</span><span>${p.dist < 0 ? "In the money." : "Within 3% of the strike."}</span></div>` : ""}
+    ${short ? posChances(p) : ""}
     ${readingsTable(p.readings)}
-    <div class=actions style="justify-content:space-between">${short ? `<button class=btn onclick="openTicket({expiry:'${p.expiry}',strike:${p.strike},type:'${p.type}',action:'sell_to_open',from:${p.id}})">Sell more</button>` : "<span></span>"}
-      <button class="btn primary" onclick="openTicket({close:${p.id},from:${p.id}})">Close position…</button></div></div>`;
+    <div class=actions style="justify-content:space-between"><button class=btn onclick="closeDrawer();go('pos:${p.id}')" data-tip="Portfolio, with this position highlighted">Show in Portfolio</button>
+      <span style="display:flex;gap:8px">${short ? `<button class=btn onclick="openTicket({expiry:'${p.expiry}',strike:${p.strike},type:'${p.type}',action:'sell_to_open',from:${p.id}})">Sell more</button>` : ""}
+      <button class="btn primary" onclick="openTicket({close:${p.id},from:${p.id}})">Close position…</button></span></div></div>`;
 }
 
 function storyPanel(p) {
@@ -614,12 +641,31 @@ function storyPanel(p) {
 
 /* ---------- indicator readings saved on trades ---------- */
 const r0 = v => v == null ? "—" : Math.round(v);
+const hasReadings = r => r && ["stoch14_k", "stoch30_k", "stoch60_k", "stoch180_k", "vix", "fg"].some(k => r[k] != null);
+function posChances(p) {
+  const c = p.chances, o = p.chances_open;
+  if (!c) return "";
+  const k = kTxt(p.strike), be = "$" + f2(c.breakeven), was = v => v == null ? "" : ` <span class=meta>· was ${(v * 100).toFixed(0)}%</span>`;
+  const rows = p.type === "put" ? [
+    ["Chance of expiring worthless", c.worthless, o && o.worthless, `% chance TQQQ closes above ${k} at expiration: the put expires and you keep the whole premium`],
+    ["Chance of assignment", 1 - c.worthless, o && 1 - o.worthless, `% chance TQQQ closes below ${k} and you buy 100 shares per contract at ${k}`],
+    ["Chance of profit at expiration", c.profit, o && o.profit, `% chance TQQQ closes above ${be}, the breakeven (${k} strike − premium): either expiring worthless, or assigned with the drop smaller than the premium`],
+  ] : [
+    ["Chance of expiring worthless", c.worthless, o && o.worthless, `% chance TQQQ closes below ${k} at expiration: the call expires, your shares stay, you keep the whole premium`],
+    ["Chance of being called away", 1 - c.worthless, o && 1 - o.worthless, `% chance TQQQ closes above ${k} and your 100 shares per contract are sold at ${k}`],
+    ["Chance of profit at expiration", c.profit, o && o.profit, `% chance TQQQ closes below ${be} (${k} strike + premium), where the premium outweighs what selling at ${k} gives up`],
+  ];
+  return `<div class=meta style="margin:14px 0 4px">CHANCES NOW${o ? ` <span style="opacity:.8">· and when you opened it</span>` : ""}</div>
+    <table class=mini><tbody>${rows.map(([lab, v, w, tip]) => `<tr data-tip="${esc(tip)}"><td class=l>${lab}</td><td><b>${(v * 100).toFixed(0)}%</b>${o ? was(w) : ""}</td></tr>`).join("")}</tbody></table>
+    <div class=meta style="text-align:right;font-size:11px">From today's implied volatility and days left · estimates, not predictions · hover a line for what it means</div>`;
+}
 function readingsLine(r, day) {
-  if (!r) return "";
+  if (!hasReadings(r)) return "";
   return `<div class="meta rd lnk" data-go="ind:${day}" data-tip="Double-click: Indicators on this date">${I("chart")} Stoch 14,3,3 ${r0(r.stoch14_k)}/${r0(r.stoch14_d)} · 30: ${r0(r.stoch30_k)} · 60: ${r0(r.stoch60_k)} · 180: ${r0(r.stoch180_k)} · VIX ${r.vix == null ? "—" : f2(r.vix)} · Fear & Greed ${r0(r.fg)}${r.fg_rating ? " " + esc(r.fg_rating) : ""}</div>`;
 }
 function readingsTable(list) {
-  if (!list || !list.length) return "";
+  list = (list || []).filter(hasReadings);
+  if (!list.length) return "";
   const rows = list.map(r => `<tr class=lnk data-go="ind:${r.day}" data-tip="Double-click: Indicators on this date"><td class=l>${esc(r.label)}<div class=meta>${esc(r.when)}</div></td><td>${r0(r.stoch14_k)}/${r0(r.stoch14_d)}</td><td>${r0(r.stoch30_k)}</td><td>${r0(r.stoch60_k)}</td><td>${r0(r.stoch180_k)}</td><td>${r.vix == null ? "—" : f2(r.vix)}</td><td>${r0(r.fg)}<div class=meta>${esc(r.fg_rating || "")}</div></td></tr>`).join("");
   return `<div class=meta style="margin:14px 0 4px">MARKET AT EACH TRADE <span class="lnk helplink" onclick="go('ind')" style="margin-left:6px">Indicators ↗</span></div>
     <table class="mini rdt"><thead><tr><th class=l></th><th>Stoch 14,3,3</th><th>30</th><th>60</th><th>180</th><th>VIX</th><th>F&amp;G</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -800,16 +846,17 @@ async function renderPerf() {
   $$(".mk").forEach(m => m.addEventListener("click", e => { e.stopPropagation(); clearTimeout(pinT); if (e.detail === 1) pinT = setTimeout(() => { if (ui.tab === "Performance") { ui.pin = +m.dataset.j; render(); } }, 260); }));
 }
 async function renderOutcomes() {
-  const o = await api("outcomes", {by: ui.outBy || "stoch14"}), el = $("#outcomes");
+  const o = await api("outcomes", {by: ui.outBy || "stoch14", range: ui.outRange}), el = $("#outcomes");
   if (!el || o.error) return;
-  const tabs = `<div class=stabs role=tablist>${o.options.map(([k, t]) => `<button role=tab class="${k === o.by ? "on" : ""}" data-ob="${k}">${t}</button>`).join("")}</div>`;
+  const tabs = `<div class=stabs role=tablist>${o.options.map(([k, t]) => `<button role=tab class="${k === o.by ? "on" : ""}" data-ob="${k}">${t}</button>`).join("")}<span class=srng><span class="seg irng">${RANGES.map(r => `<button class="btn small ${o.range === r ? "on" : ""}" data-or="${r}">${r}</button>`).join("")}</span></span></div>`;
   const pc = v => v == null ? "—" : (v * 100).toFixed(0) + "%";
   const rows = o.groups.map(g => `<tr class="${g.n ? "" : "dim"}"><td class=l>${esc(g.label)}</td><td>${g.n}</td><td>${pc(g.win_rate)}</td><td>${pc(g.kept)}</td><td>${g.n ? g.expired : "—"}</td><td>${g.n ? g.assigned : "—"}</td><td class="${g.avg_result_c > 0 ? "up" : g.avg_result_c < 0 ? "down" : ""}">${g.avg_result_c == null ? "—" : mc(g.avg_result_c, true)}</td></tr>`).join("");
   el.innerHTML = `<h2>Readings at entry vs. outcomes</h2><div class="stochpanel" style="margin-top:0">${tabs}
     ${o.total ? `<table class=outt><thead><tr><th class=l>When opened, ${esc(o.options.find(x => x[0] === o.by)[1])} was</th><th>Trades</th><th>Win rate</th><th>Avg % of premium kept</th><th>Expired worthless</th><th>Assigned / called</th><th>Avg result</th></tr></thead><tbody>${rows}</tbody></table>
-    <div class=meta style="padding:6px 12px 8px">Finished short options this run with readings saved when opened (${o.total}${o.without ? `; ${o.without} had no reading for this one` : ""}). A win is a positive result; assigned puts count the shares at that day's close. Small groups say little.</div>`
-    : `<div class=empty style="padding:18px 12px">Nothing to compare yet. Trades placed from v1.6.0 on save their readings; once they finish (expire, get assigned or are closed) they're grouped here.</div>`}</div>`;
+    <div class=meta style="padding:6px 12px 8px">Finished short options this run, opened in the last ${({"14D": "14 days", "1M": "month", "3M": "3 months", "6M": "6 months", "1Y": "year", "5Y": "5 years"})[o.range]}, with readings saved when opened (${o.total}${o.without ? `; ${o.without} had no reading for this one` : ""}). A win is a positive result; assigned puts count the shares at that day's close. Small groups say little.</div>`
+    : `<div class=empty style="padding:18px 12px">Nothing to compare in this range. Trades placed from v1.6.0 on save their readings; once they finish (expire, get assigned or are closed) they're grouped here by when they were opened.</div>`}</div>`;
   $$("[data-ob]").forEach(b => b.onclick = () => { ui.outBy = b.dataset.ob; renderOutcomes(); });
+  $$("[data-or]").forEach(b => b.onclick = () => { ui.outRange = b.dataset.or; api("settings_set", {out_range: ui.outRange}); renderOutcomes(); });
 }
 function monthBars(p) {
   const ms = p.monthly.slice(-6);
@@ -999,7 +1046,7 @@ function paintSplash(s) {
 }
 async function startup() {
   boot = await api("boot");
-  ui.theme = boot.theme || "system"; applyTheme(); ui.autoMin = boot.auto_refresh ?? 10; setAutoRefresh();
+  ui.theme = boot.theme || "system"; applyTheme(); ui.autoMin = boot.auto_refresh ?? 10; setAutoRefresh(); if (boot.ind_ranges) ui.indRanges = {...ui.indRanges, ...boot.ind_ranges}; ui.outRange = boot.out_range || "3M";
   if (boot.demo) { const d = document.createElement("div"); d.className = "demo"; d.textContent = "Demo mode · synthetic data · separate demo ledger"; document.body.appendChild(d); }
   await api("loaded");
   setInterval(async () => { const h = await api("heartbeat"); if (h.restarting) $("#splash").innerHTML = `<div class=splash><div class=modal><h3>${LOGO} Restarting…</h3><div class=meta>Ghost Trader is restarting. If this is a browser tab, you can close it.</div></div></div>`; }, 5000);

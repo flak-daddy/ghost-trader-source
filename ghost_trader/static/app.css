@@ -156,3 +156,11 @@ input.bad{border-color:var(--down)}
 .chances{border-top:1px dashed var(--line);margin-top:4px;padding-top:2px}
 .arule{display:flex;gap:6px;align-items:center;margin:3px 0}.arule select{padding:2px 4px}
 .outt th,.outt td{padding:7px 12px}.outt tr.dim td{opacity:.5}
+.itiles .thead{font-size:24px;font-weight:600;line-height:1.25;margin:2px 0 6px}.itiles .thead .pill{font-size:12px;vertical-align:middle;font-weight:500}
+.stile{background:color-mix(in srgb,var(--accent) 6%,var(--panel));border-color:color-mix(in srgb,var(--accent) 30%,var(--line))}
+.stabs{align-items:center}.stabs .srng{margin-left:auto;padding:3px 4px}
+.gflex{display:flex;align-items:center}.gflex .irng{margin-left:auto;text-transform:none;letter-spacing:0;font-weight:400}
+.ihead .irng{margin-left:auto}.ihead .irng+.meta{margin-left:10px}
+.ctxmenu{position:fixed;z-index:100;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px;box-shadow:0 10px 30px var(--shadow)}
+.ctxmenu button{display:flex;gap:8px;align-items:center;background:none;border:0;color:var(--text);font:inherit;font-size:13px;padding:7px 12px;border-radius:6px;cursor:pointer;white-space:nowrap}
+.ctxmenu button:hover{background:var(--panel2)}
