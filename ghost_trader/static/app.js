@@ -40,7 +40,7 @@ async function api(name, args = {}) {
 /* ---------- state ---------- */
 let st = null, boot = {};
 let ui = {tab: "Portfolio", pfMode: null, flashPos: null, chainExp: null, chainView: "both", flashStrike: null,
-  hFilter: "All", hTag: null, hDay: null, hEvent: null, hExpand: null, calMonth: null, lot: null, lotEvent: null, perfDay: null, pin: null, chartTable: false, theme: "system"};
+  hFilter: "All", hTag: null, hDay: null, hEvent: null, hExpand: null, calMonth: null, lot: null, lotEvent: null, perfDay: null, pin: null, chartTable: false, theme: "system", indN: "14", indRange: "3M", indTable: false};
 const S = () => (st && st.price) || 0;
 const label = p => p.label;
 
@@ -52,7 +52,7 @@ function applyTheme() {
 matchMedia("(prefers-color-scheme: light)").addEventListener("change", applyTheme);
 
 /* ---------- header ---------- */
-const TABS = ["Portfolio", "Chain", "History", "Performance", "Settings", "Help"];
+const TABS = ["Portfolio", "Chain", "Indicators", "History", "Performance", "Settings", "Help"];
 function renderHeader() {
   const errs = st ? st.errors : 0;
   $("#tabs").innerHTML = TABS.map(t => `<button class="${ui.tab === t ? "on" : ""}" data-tab="${t}">${t}${t === "History" && errs ? `<span class=badge>${errs}</span>` : ""}</button>`).join("");
@@ -88,7 +88,7 @@ document.addEventListener("mouseover", e => {
 });
 
 /* ---------- navigation ---------- */
-function resetMarks() { ui.pfMode = null; ui.flashPos = null; ui.flashStrike = null; ui.lot = null; ui.lotEvent = null; ui.perfDay = null; ui.pin = null; ui.hExpand = null; ui.hDay = null; ui.hEvent = null; }
+function resetMarks() { ui.indPin = null; ui.indFlash = false; ui.pfMode = null; ui.flashPos = null; ui.flashStrike = null; ui.lot = null; ui.lotEvent = null; ui.perfDay = null; ui.pin = null; ui.hExpand = null; ui.hDay = null; ui.hEvent = null; }
 async function go(target) {
   const [a, b, c, d] = target.split(":");
   const hKeep = {f: ui.hFilter, t: ui.hTag, d: ui.hDay};
@@ -108,6 +108,9 @@ async function go(target) {
   else if (a === "perf") { ui.tab = "Performance"; ui.perfDay = b; }
   else if (a === "report") { showReport(); return; }
   else if (a === "help") { ui.tab = "Help"; ui.helpAt = b || null; }
+  else if (a === "ind") { ui.tab = "Indicators"; if (b) { ui.indPin = b; ui.indFlash = true;
+    const back = (Date.now() - new Date(b + "T12:00:00")) / 864e5, need = back <= 88 ? "3M" : back <= 180 ? "6M" : back <= 362 ? "1Y" : "2Y";
+    if (["3M", "6M", "1Y", "2Y"].indexOf(need) > ["3M", "6M", "1Y", "2Y"].indexOf(ui.indRange)) ui.indRange = need; } }
   else if (a === "poshist") { ui.tab = "History"; ui.hFilter = hKeep.f; ui.hTag = hKeep.t; ui.hEvent = null;
     closeOverlay(); closeDrawer(); await render(); openPosPanel(+b); return; }
   closeOverlay(); closeDrawer(); await render(); scrollTo(0, 0);
@@ -127,8 +130,8 @@ document.addEventListener("keydown", e => {
   if (!st) return;
   if (e.target.matches("input,select,textarea")) { if (e.key === "Escape") e.target.blur(); else return; }
   if ($("#splash").innerHTML) return;
-  if (e.key === "Escape") { if ($("#overlay").innerHTML) closeOverlay(); else if ($("#drawer").innerHTML) { if (tk) cancelTicket(); else closeDrawer(); } else if (ui.pin != null) { ui.pin = null; render(); } else if (ui.lot) { ui.lot = null; render(); } }
-  if (/^[1-6]$/.test(e.key) && !$("#overlay").innerHTML && st.run) { ui.tab = TABS[+e.key - 1]; resetMarks(); closeDrawer(); render(); }
+  if (e.key === "Escape") { if ($("#overlay").innerHTML) closeOverlay(); else if ($("#drawer").innerHTML) { if (tk) cancelTicket(); else closeDrawer(); } else if (ui.pin != null) { ui.pin = null; render(); } else if (ui.indPin && ui.tab === "Indicators") { ui.indPin = null; render(); } else if (ui.lot) { ui.lot = null; render(); } }
+  if (/^[1-7]$/.test(e.key) && !$("#overlay").innerHTML && st.run) { ui.tab = TABS[+e.key - 1]; resetMarks(); closeDrawer(); render(); }
   if (e.key === "Enter" && $("#confirmBtn") && !$("#confirmBtn").disabled) $("#confirmBtn").click();
 });
 
@@ -136,7 +139,7 @@ document.addEventListener("keydown", e => {
 async function refreshState() { const s = await api("state"); if (!s.error) st = s; return st; }
 async function render() {
   applyTheme(); renderHeader();
-  const fn = {Portfolio: renderPortfolio, Chain: renderChain, History: renderHistory, Performance: renderPerf, Settings: renderSettings, Help: renderHelp}[ui.tab];
+  const fn = {Portfolio: renderPortfolio, Chain: renderChain, History: renderHistory, Indicators: renderIndicators, Performance: renderPerf, Settings: renderSettings, Help: renderHelp}[ui.tab];
   await fn();
   renderHeader();
 }
@@ -359,6 +362,138 @@ function helpFor(t) {
   return sec ? ` <span class="lnk helplink" onclick="go('help:${sec[0]}')" data-tip="Open the manual at this section">${sec[1]} ↗</span>` : "";
 }
 
+/* ---------- INDICATORS ---------- */
+let indData = null;
+const FG_BANDS = [[0, 25, "Extreme fear"], [25, 45, "Fear"], [45, 55, "Neutral"], [55, 75, "Greed"], [75, 100, "Extreme greed"]];
+const fgName = v => v == null ? "" : (FG_BANDS.find(([a, b]) => Math.round(v) < b) || FG_BANDS[4])[2];
+const zone = v => v == null ? "" : v >= 80 ? "overbought zone" : v <= 20 ? "oversold zone" : "";
+const chg = (a, b, d = 2) => (a == null || b == null) ? "" : `<span class="${a >= b ? "up" : "down"}">${a >= b ? "+" : "−"}${Math.abs(a - b).toFixed(d)}</span>`;
+const fmtDay = d => { const t = new Date(d + "T12:00:00"); return t.toLocaleDateString("en-US", {month: "short", day: "numeric", year: "2-digit"}); };
+const IW = 900, IL = 56, IR = 96;
+function ichart(c, N, xlab) {
+  const H = c.h, T = 14, B = xlab ? 26 : 10, pw = IW - IL - IR;
+  const X = i => IL + (N > 1 ? pw * i / (N - 1) : pw / 2), Y = v => T + (H - T - B) * (c.hi - v) / (c.hi - c.lo);
+  let g = "";
+  for (const t of c.ticks) g += `<line x1=${IL} x2=${IW - IR} y1=${Y(t)} y2=${Y(t)} stroke="var(--line)"/><text x=${IL - 8} y=${Y(t) + 4} fill="var(--dim)" font-size=11 text-anchor=end>${c.tfmt ? c.tfmt(t) : t}</text>`;
+  for (const r of c.refs || []) g += `<line x1=${IL} x2=${IW - IR} y1=${Y(r.y)} y2=${Y(r.y)} stroke="var(--dim)" stroke-dasharray="4 4" opacity=".7" />`;
+  for (const b of c.bands || []) g += `<text x=${IW - IR + 8} y=${Y((b[0] + b[1]) / 2) + 4} fill="var(--dim)" font-size=10.5>${b[2]}</text>`;
+  const path = v => { let s = "", pen = false; v.forEach((x, i) => { if (x == null) { pen = false; return; } s += (pen ? " L" : " M") + X(i).toFixed(1) + "," + Y(x).toFixed(1); pen = true; }); return s; };
+  const lines = c.series.map(s => `<path d="${path(s.v)}" fill=none stroke="${s.color}" stroke-width=2 ${s.dash ? 'stroke-dasharray="5 4"' : ""} stroke-linejoin=round stroke-linecap=round />`).join("");
+  let endl = "";
+  if (!c.bands) c.series.forEach((s, j) => { const i = s.v.map((x, k) => x == null ? -1 : k).filter(k => k >= 0).pop(); if (i == null) return;
+    endl += `<text x=${IW - IR + 8} y=${Y(s.v[i]) + 4 + (c.series.length > 1 ? (j ? 9 : -5) * (Math.abs(Y(s.v[i]) - Y(c.series[1 - j].v[i] ?? s.v[i])) < 14 ? 1 : 0) : 0)} fill="var(--text)" font-size=11.5 font-weight=600>${c.efmt ? c.efmt(s.v[i]) : s.v[i].toFixed(1)}${c.series.length > 1 ? " " + s.name : ""}</text>`; });
+  let xl = "";
+  if (xlab && N > 1) { const tk = [...new Set([0, Math.round((N - 1) / 4), Math.round((N - 1) / 2), Math.round(3 * (N - 1) / 4), N - 1])];
+    xl = tk.map(i => `<text x=${X(i)} y=${H - 6} fill="var(--dim)" font-size=11 text-anchor=${i === 0 ? "start" : i === N - 1 ? "end" : "middle"}>${fmtDay(xlab[i])}</text>`).join(""); }
+  return `<div class=ichart><div class=ihead><b>${c.title}</b>${c.ctl || ""}${c.legend || ""}<span class=meta>${c.sub || ""}</span></div>
+    <svg viewBox="0 0 ${IW} ${H}" width="100%" data-t=${T} data-b=${H - B}>${g}${lines}${endl}${xl}<line class=xh x1=0 x2=0 y1=${T} y2=${H - B} stroke="var(--dim)" stroke-width=1 style="display:none"/></svg></div>`;
+}
+function niceTicks(lo, hi, n) { const st = niceStep(hi - lo, n), out = []; for (let v = Math.ceil(lo / st) * st; v <= hi + 1e-9; v += st) out.push(+v.toFixed(6)); return out; }
+async function renderIndicators(refresh) {
+  if (!indData || refresh || indData.range !== ui.indRange) {
+    if (!indData || indData.range !== ui.indRange) $("#main").innerHTML = `<div class=meta style="padding:20px 0"><span class=spin>${I("spin")}</span> Getting TQQQ, the VIX and Fear & Greed…</div>`;
+    const d = await api("indicators", {range: ui.indRange, refresh: !!refresh});
+    if (d.error) { $("#main").innerHTML = `<div class="alert e"><span class=ic>${I("alert")}</span><span>${esc(d.error)}</span></div>`; return; }
+    indData = d;
+  }
+  if (ui.tab !== "Indicators") return;
+  const d = indData, nw = d.now, n = ui.indN, N = d.days.length, sel = d.stoch[n] || {k: [], d: null};
+  const names = {tqqq: "TQQQ prices (Yahoo)", vix: "the VIX (Yahoo)", fg: "Fear & Greed (CNN)"};
+  const alerts = Object.entries(d.status).filter(([, s]) => !s.ok).map(([k, s]) => `<div class="alert w"><span class=ic>${I("warn")}</span><span><b>Couldn't get ${names[k]}:</b> ${esc(s.error || "no data")}. ${s.at ? `Showing what was fetched ${esc(s.at_txt)}.` : "It'll show here once it's available."}${k === "fg" ? " CNN has no official feed, so its site changing can break this." : ""}</span></div>`).join("");
+  const label = k => k === "14" ? "14,3,3" : k + "-day";
+  const srows = d.lookbacks.map(String).map(k => { const c = nw.stoch[k] || {};
+    return `<tr class="click ${k === n ? "cur" : ""}" data-in="${k}"><td class=l>${label(k)}</td><td><b>${r0(c.k)}</b>${c.d != null ? `<span class=meta> / ${r0(c.d)}</span>` : ""}</td><td>${c.k != null && c.k_prev != null ? `<span class="${c.k >= c.k_prev ? "up" : "down"}">${c.k >= c.k_prev ? "▲" : "▼"}</span>` : ""}</td><td class="l meta">${zone(c.k)}</td></tr>`; }).join("");
+  const fg = nw.fg || {};
+  const cards = `<div class=cards style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+    <div class=card><small>TQQQ</small><span class=big>${nw.price == null ? "—" : "$" + f2(nw.price)}</span><div class=meta>${chg(nw.price, nw.prev)} vs. prior day · bars through ${nw.bars_through ? esc(fmtDay(nw.bars_through)) : "—"}</div></div>
+    <div class=card><small>Stochastic (%K${nw.stoch["14"] && nw.stoch["14"].d != null ? " / %D" : ""})</small><table class="mini istoch"><tbody>${srows}</tbody></table></div>
+    <div class=card><small>VIX</small><span class=big>${nw.vix == null ? "—" : f2(nw.vix)}</span><div class=meta>${chg(nw.vix, nw.vix_prev)} vs. prior close${nw.vix_lo != null ? ` · 1-year range ${f2(nw.vix_lo)}–${f2(nw.vix_hi)}` : ""}</div></div>
+    <div class=card><small>Fear &amp; Greed</small><span class=big>${fg.score == null ? "—" : Math.round(fg.score)}</span> <span class=pill>${esc(fg.rating || fgName(fg.score) || "unavailable")}</span>
+      <div class=meta>${[["prior close", fg.previous_close], ["1 week", fg.week_ago], ["1 month", fg.month_ago], ["1 year", fg.year_ago]].filter(x => x[1] != null).map(([a, v]) => `${a} ${Math.round(v)}`).join(" · ")}</div></div></div>`;
+  const seg = (items, cur, attr) => `<span class=seg>${items.map(([v, t]) => `<button class="btn small ${v === cur ? "on" : ""}" ${attr}="${v}">${t}</button>`).join("")}</span>`;
+  const stochTabs = `<div class=stabs role=tablist>${d.lookbacks.map(String).map(k => `<button role=tab class="${k === n ? "on" : ""}" data-in="${k}">${label(k)}</button>`).join("")}</div>`;
+  const bar = `<div class=bar style="margin-bottom:10px"><span class=meta>Every chart and the table cover the same dates</span>
+    <span style="margin-left:auto;display:flex;gap:8px;align-items:center"><span class=meta>Range</span>${seg([["3M", "3M"], ["6M", "6M"], ["1Y", "1Y"], ["2Y", "2Y"]], ui.indRange, "data-ir")}
+    ${seg([["chart", "Chart"], ["table", "Table"]], ui.indTable ? "table" : "chart", "data-iv")}
+    <button class="btn small" id=indRef>${I("refresh")} Refresh</button></span></div>`;
+  let body;
+  if (!N) body = `<div class=empty>No TQQQ price history yet.</div>`;
+  else if (ui.indTable) {
+    const rows = d.days.map((day, i) => `<tr><td class=l>${esc(fmtDay(day))}</td><td>${f2(d.close[i])}</td><td>${r0(sel.k[i])}</td>${sel.d ? `<td>${r0(sel.d[i])}</td>` : ""}<td>${d.vix[i] == null ? "—" : f2(d.vix[i])}</td><td>${r0(d.fg[i])}</td><td class="l meta">${d.fg[i] == null ? "" : fgName(d.fg[i])}</td></tr>`).reverse().join("");
+    body = `<div class="stochpanel tblmode" style="margin-top:12px">${stochTabs}<span class=meta style="padding:0 10px">picks the stochastic column</span></div><div class=chainbox style="max-height:60vh"><table class=both><thead><tr><th class=l>Date</th><th>TQQQ close</th><th>Stoch ${label(n)} %K</th>${sel.d ? "<th>%D</th>" : ""}<th>VIX</th><th>Fear &amp; Greed</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  } else {
+    const cl = d.close.filter(x => x != null), clo = Math.min(...cl), chi = Math.max(...cl), cp = Math.max((chi - clo) * .08, .5);
+    const vx = d.vix.filter(x => x != null), vlo = vx.length ? Math.min(...vx) : 10, vhi = vx.length ? Math.max(...vx) : 30, vp = Math.max((vhi - vlo) * .1, .5);
+    const ct = niceTicks(clo - cp, chi + cp, 4), vt = niceTicks(Math.max(0, vlo - vp), vhi + vp, 4);
+    const leg = sel.d ? `<span class=ileg><svg width=22 height=8><line x1=0 x2=22 y1=4 y2=4 stroke="var(--s1)" stroke-width=2 /></svg>%K <svg width=22 height=8><line x1=0 x2=22 y1=4 y2=4 stroke="var(--s2)" stroke-width=2 stroke-dasharray="5 4"/></svg>%D</span>` : "";
+    body = `<div class=ichartbox id=ichartbox style="position:relative;margin-top:12px">
+      <div class="card igroup"><div class=gtitle>TQQQ</div>
+      ${ichart({title: "Price", sub: "daily close", h: 190, lo: ct[0], hi: ct[ct.length - 1], ticks: ct, tfmt: t => "$" + t, efmt: v => "$" + v.toFixed(2), series: [{v: d.close, color: "var(--s1)"}]}, N)}
+      <div class=stochpanel>${stochTabs}
+      ${ichart({title: "Stochastic", legend: leg, sub: sel.d ? "%K smoothed 3 · %D = 3-day average of %K · 80 / 20 lines" : `raw %K over ${n} trading days · 80 / 20 lines`, h: 170, lo: 0, hi: 100, ticks: [0, 20, 50, 80, 100], refs: [{y: 80}, {y: 20}], efmt: v => Math.round(v), series: sel.d ? [{v: sel.k, color: "var(--s1)", name: "%K"}, {v: sel.d, color: "var(--s2)", dash: true, name: "%D"}] : [{v: sel.k, color: "var(--s1)"}]}, N, d.days)}</div></div>
+      <div class="card igroup" style="margin-top:12px"><div class=gtitle>Market mood</div>
+      ${ichart({title: "VIX", sub: "S&P 500 expected volatility, daily close", h: 150, lo: vt[0], hi: vt[vt.length - 1], ticks: vt, efmt: v => v.toFixed(2), series: [{v: d.vix, color: "var(--s1)"}]}, N)}
+      ${ichart({title: "Fear & Greed", sub: "CNN, 0–100", h: 170, lo: 0, hi: 100, ticks: [0, 25, 45, 55, 75, 100], bands: FG_BANDS, series: [{v: d.fg, color: "var(--s1)"}]}, N, d.days)}</div>
+      <div class=itip id=itip></div></div>`;
+  }
+  $("#main").innerHTML = `${alerts}${bar}${cards}${body}
+    <div class=meta style="margin-top:8px">TQQQ and the VIX from Yahoo (~15 min delayed) · Fear &amp; Greed from CNN's site (unofficial) · readings are saved with each trade you place · <span class="lnk helplink" style="margin:0" onclick="go('help:indicators')">How these work ↗</span></div>`;
+  $$("[data-in]").forEach(b => b.onclick = () => { ui.indN = b.dataset.in; renderIndicators(); });
+  $$("[data-ir]").forEach(b => b.onclick = () => { ui.indRange = b.dataset.ir; renderIndicators(); });
+  $$("[data-iv]").forEach(b => b.onclick = () => { ui.indTable = b.dataset.iv === "table"; renderIndicators(); });
+  $("#indRef").onclick = async () => { $("#indRef").innerHTML = `<span class=spin>${I("spin")}</span> Refreshing…`; await renderIndicators(true); };
+  const box = $("#ichartbox"); if (!box) return;
+  const tip = $("#itip");
+  const idxOfDay = day => { let j = -1; d.days.forEach((x, i) => { if (x <= day) j = i; }); return j; };
+  const xAt = i => IL + (N > 1 ? (IW - IL - IR) * i / (N - 1) : 0);
+  const iAt = e => { const svg = e.target.closest && e.target.closest(".ichart > svg"); if (!svg) return null;
+    const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) * IW / r.width;
+    return Math.max(0, Math.min(N - 1, Math.round((x - IL) / (IW - IL - IR) * (N - 1)))); };
+  const hide = () => { tip.style.display = "none"; $$(".xh").forEach(l => l.style.display = "none"); };
+  const showAt = (i, y, pinned) => {
+    const X = xAt(i);
+    $$(".xh").forEach(l => { l.setAttribute("x1", X); l.setAttribute("x2", X); l.style.display = ""; l.setAttribute("stroke", pinned ? "var(--warn)" : "var(--dim)"); l.setAttribute("stroke-dasharray", pinned ? "3 3" : ""); });
+    tip.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><b>${esc(fmtDay(d.days[i]))}</b>${pinned ? `<span class=ipx id=iUnpin title="Unpin (Esc)">${I("x")}</span>` : ""}</div>
+      <div class=row><span class=meta>TQQQ</span><span>$${f2(d.close[i])}</span></div>
+      <div class=row><span class=meta>Stoch ${label(n)}</span><span>${r0(sel.k[i])}${sel.d ? " / " + r0(sel.d[i]) : ""}</span></div>
+      <div class=row><span class=meta>VIX</span><span>${d.vix[i] == null ? "—" : f2(d.vix[i])}</span></div>
+      <div class=row><span class=meta>Fear &amp; Greed</span><span>${d.fg[i] == null ? "—" : Math.round(d.fg[i]) + " · " + fgName(d.fg[i])}</span></div>
+      <div class="meta ifoot">${pinned ? "PINNED · " : "CLICK TO PIN · "}DOUBLE-CLICK: HISTORY FOR THIS DAY</div>`;
+    tip.style.display = "block"; tip.classList.toggle("pinned", !!pinned);
+    const sv = box.querySelector(".ichart > svg").getBoundingClientRect(), br = box.getBoundingClientRect();
+    const px = (X / IW) * sv.width + sv.left - br.left;
+    tip.style.left = (px > br.width - 230 ? px - tip.offsetWidth - 14 : px + 14) + "px";
+    tip.style.top = Math.max(8, y) + "px";
+    const u = $("#iUnpin"); if (u) u.onclick = ev => { ev.stopPropagation(); ui.indPin = null; hide(); };
+  };
+  const pinned = () => ui.indPin ? idxOfDay(ui.indPin) : -1;
+  if (pinned() >= 0) {
+    const i = pinned();
+    if (ui.indFlash) { ui.indFlash = false; box.querySelectorAll(".ichart > svg").forEach(sv => { const B = +sv.dataset.b, T = +sv.dataset.t;
+      sv.insertAdjacentHTML("afterbegin", `<rect class=iflash x=${xAt(i) - 7} y=${T} width=14 height=${B - T} fill="var(--warn)" opacity=.22 />`); }); }
+    showAt(i, 60, true);
+  } else if (ui.indPin) ui.indPin = null;
+  box.addEventListener("mouseleave", () => { if (pinned() < 0) hide(); });
+  box.addEventListener("mousemove", e => {
+    if (pinned() >= 0) return;
+    const i = iAt(e); if (i == null) { hide(); return; }
+    showAt(i, e.clientY - box.getBoundingClientRect().top - 40, false);
+  });
+  let clickT;
+  box.addEventListener("click", e => {
+    if (e.target.closest("#iUnpin")) return;
+    const i = iAt(e); if (i == null) return;
+    clearTimeout(clickT);
+    if (e.detail !== 1) return;
+    clickT = setTimeout(() => { ui.indPin = d.days[i]; showAt(i, e.clientY - box.getBoundingClientRect().top - 40, true); }, 260);
+  });
+  box.addEventListener("dblclick", e => {
+    clearTimeout(clickT);
+    const i = iAt(e); if (i == null) return;
+    getSelection().removeAllRanges(); go("history:day:" + d.days[i]);
+  });
+}
+
 /* ---------- HELP ---------- */
 let manualData = null;
 async function renderHelp() {
@@ -415,6 +550,7 @@ async function openPosPanel(id) {
     </tbody></table>
     ${p.note ? `<div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--panel2);font-size:13px"><span class=meta>Your note</span><br><i>“${esc(p.note)}”</i></div>` : ""}
     ${short && p.type === "put" && p.dist < 0.03 ? `<div class="alert w" style="margin-top:10px"><span class=ic>${I("warn")}</span><span>${p.dist < 0 ? "In the money." : "Within 3% of the strike."}</span></div>` : ""}
+    ${readingsTable(p.readings)}
     <div class=actions style="justify-content:space-between">${short ? `<button class=btn onclick="openTicket({expiry:'${p.expiry}',strike:${p.strike},type:'${p.type}',action:'sell_to_open',from:${p.id}})">Sell more</button>` : "<span></span>"}
       <button class="btn primary" onclick="openTicket({close:${p.id},from:${p.id}})">Close position…</button></div></div>`;
 }
@@ -439,8 +575,22 @@ function storyPanel(p) {
     </tbody></table>
     ${p.note ? `<div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--panel2);font-size:13px"><span class=meta>Your note</span><br><i>“${esc(p.note)}”</i></div>` : ""}
     ${p.close_notes.length ? `<div style="margin-top:8px;padding:8px 10px;border-radius:6px;background:var(--panel2);font-size:13px"><span class=meta>Why you closed</span><br><i>${p.close_notes.map(n => "“" + esc(n) + "”").join("<br>")}</i></div>` : ""}
+    ${readingsTable(p.readings)}
     <div class=meta style="margin:14px 0 4px">TIMELINE</div><div class=tl>${tl}</div>
     ${p.lot_id && p.status === "assigned" ? `<div class=actions style="justify-content:flex-start"><button class=btn onclick="closeDrawer();go('history:lot:${p.lot_id}')">Open the share lot it created</button></div>` : ""}</div>`;
+}
+
+/* ---------- indicator readings saved on trades ---------- */
+const r0 = v => v == null ? "—" : Math.round(v);
+function readingsLine(r, day) {
+  if (!r) return "";
+  return `<div class="meta rd lnk" data-go="ind:${day}" data-tip="Double-click: Indicators on this date">${I("chart")} Stoch 14,3,3 ${r0(r.stoch14_k)}/${r0(r.stoch14_d)} · 30: ${r0(r.stoch30_k)} · 60: ${r0(r.stoch60_k)} · 180: ${r0(r.stoch180_k)} · VIX ${r.vix == null ? "—" : f2(r.vix)} · Fear & Greed ${r0(r.fg)}${r.fg_rating ? " " + esc(r.fg_rating) : ""}</div>`;
+}
+function readingsTable(list) {
+  if (!list || !list.length) return "";
+  const rows = list.map(r => `<tr class=lnk data-go="ind:${r.day}" data-tip="Double-click: Indicators on this date"><td class=l>${esc(r.label)}<div class=meta>${esc(r.when)}</div></td><td>${r0(r.stoch14_k)}/${r0(r.stoch14_d)}</td><td>${r0(r.stoch30_k)}</td><td>${r0(r.stoch60_k)}</td><td>${r0(r.stoch180_k)}</td><td>${r.vix == null ? "—" : f2(r.vix)}</td><td>${r0(r.fg)}<div class=meta>${esc(r.fg_rating || "")}</div></td></tr>`).join("");
+  return `<div class=meta style="margin:14px 0 4px">MARKET AT EACH TRADE <span class="lnk helplink" onclick="go('ind')" style="margin-left:6px">Indicators ↗</span></div>
+    <table class="mini rdt"><thead><tr><th class=l></th><th>Stoch 14,3,3</th><th>30</th><th>60</th><th>180</th><th>VIX</th><th>F&amp;G</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 /* ---------- CONFIRM ---------- */
@@ -496,7 +646,7 @@ async function renderHistory() {
       <td class=l style="width:105px"><span class=pill style="color:${colors[e.kind] || "var(--dim)"};border-color:${colors[e.kind] || "var(--line)"}">${esc(e.kind)}</span></td>
       <td class=l style="white-space:normal"><b>${esc(e.title)}</b> ${e.tags.map(t => tagHtml(t, "Double-click: filter to " + esc(t))).join("")}
       ${e.share_event ? `<button class="chip" style="margin-left:4px" data-chart="${e.day}">${I("chart")} Show on chart</button>` : ""}
-      <div class=meta style="font-size:12.5px">${esc(e.detail)}</div>${exp}</td></tr>`; }).join("") || `<tr><td class="l meta" style="padding:16px 8px">Nothing matches this filter.</td></tr>`;
+      <div class=meta style="font-size:12.5px">${esc(e.detail)}</div>${readingsLine(e.readings, e.day)}${exp}</td></tr>`; }).join("") || `<tr><td class="l meta" style="padding:16px 8px">Nothing matches this filter.</td></tr>`;
   const dayLbl = ui.hDay ? new Date(ui.hDay + "T12:00:00").toLocaleDateString("en-US", {weekday: "short", month: "short", day: "numeric"}) : "";
   const bar = ui.hDay ? `<div class=arrive><span><b>Showing ${esc(dayLbl)}</b> <span class=meta>· ${plural(list.length, "event")}</span></span><button class=chip style="margin-left:auto" id=clrDay>Clear ${I("x")}</button></div>` : ui.hTag ? `<div class=arrive><span><b>Showing events tagged ${esc(ui.hTag)}</b> <span class=meta>· ${list.length} of ${h.total} events</span></span><button class=chip style="margin-left:auto" id=clrTag>Clear ${I("x")}</button></div>`
     : ui.hFilter === "Errors" ? `<div class=arrive><span><b>Showing errors and warnings</b> <span class=meta>· ${plural(list.length, "event")}</span></span><button class=chip style="margin-left:auto" id=clrErr>Clear ${I("x")}</button></div>` : "";
@@ -666,7 +816,7 @@ async function renderSettings() {
       <span class=pill style="text-align:center">Click</span><span>pin the details</span>
       <span class=pill style="text-align:center">Double-click</span><span>jump to the related place <span class=meta>(<span class=lnk>dotted underline</span>)</span></span></div></div>
     <div class=row><label>Font</label><span class=meta>Inter, bundled with the app · ${fontOk ? "loaded " + I("check") : "using backup font"}</span></div>
-    <div class=row><label>Shortcuts</label><span class=meta><span class=kbd>1</span>–<span class=kbd>6</span> tabs · <span class=kbd>Esc</span> close · <span class=kbd>Enter</span> confirm</span></div></div>
+    <div class=row><label>Shortcuts</label><span class=meta><span class=kbd>1</span>–<span class=kbd>7</span> tabs · <span class=kbd>Esc</span> close · <span class=kbd>Enter</span> confirm</span></div></div>
   <div class=card><h2 style="margin-top:0">Runs & app</h2>
     <div class=row><label>Current run</label><span>${s.run ? "Started " + esc(s.run.start) + " · " + mc(s.run.cash_c) : "none"}</span></div>
     <div class=row style="align-items:flex-start"><label>Past runs</label><span>${s.past.length ? s.past.map(r => `<div>${esc(r.start)} → ${esc(r.end)} · ${mc(r.final_c)} <button class="btn small" data-rexp="${r.id}">Save CSV…</button></div>`).join("") : `<span class=meta>none yet · closed runs' CSVs can be re-exported here</span>`}</span></div>

@@ -124,6 +124,21 @@ class YahooProvider:
                     out[idx.date().isoformat()] = c
         return out
 
+    def daily_bars(self, symbol, start, end):
+        """Daily bars [{day, high, low, close}] (split-adjusted), including today's partial bar when trading."""
+        h = self._t(symbol).history(start=start, end=end + dt.timedelta(days=1), auto_adjust=False)
+        out = []
+        if h is not None and not h.empty:
+            for idx, row in h.iterrows():
+                c, hi, lo = _num(row.get("Close")), _num(row.get("High")), _num(row.get("Low"))
+                if c and hi and lo:
+                    out.append({"day": idx.date().isoformat(), "high": hi, "low": lo, "close": c})
+        return out
+
+    def fear_greed(self, start):
+        from .indicators import fetch_cnn
+        return fetch_cnn(start)
+
     def dividends(self):
         s = self._t().dividends
         return [(idx.date(), float(v)) for idx, v in s.items()] if s is not None else []
@@ -213,9 +228,39 @@ class DemoProvider:
         out, d = {}, start
         while d <= end:
             if marketcal.is_trading_day(d) and (d < timeutil.today_ct() or timeutil.now_ct().hour >= 15):
-                out[d.isoformat()] = 4.2 if symbol == "^IRX" else self._price_on(d)
+                if symbol == "^IRX":
+                    out[d.isoformat()] = 4.2
+                elif symbol == "^VIX":
+                    k = (d - dt.date(2026, 1, 1)).days
+                    out[d.isoformat()] = round(19 + 6 * math.sin(k / 17.0) + 2 * math.sin(k / 3.7), 2)
+                else:
+                    out[d.isoformat()] = self._price_on(d)
             d += dt.timedelta(days=1)
         return out
+
+    def daily_bars(self, symbol, start, end):
+        self._chk("daily_bars")
+        out = []
+        for day, c in sorted(self.daily_closes(start, end).items()):
+            rnd = random.Random(dt.date.fromisoformat(day).toordinal() * 7)
+            out.append({"day": day, "high": round(c * (1 + rnd.uniform(.005, .03)), 2),
+                        "low": round(c * (1 - rnd.uniform(.005, .03)), 2), "close": c})
+        return out
+
+    def fear_greed(self, start):
+        self._chk("fear_greed")
+        from .indicators import fg_rating
+        hist, d, today = {}, start, timeutil.today_ct()
+        while d <= today:
+            if marketcal.is_trading_day(d):
+                k = (d - dt.date(2026, 1, 1)).days
+                hist[d.isoformat()] = round(50 + 28 * math.sin(k / 23.0) + 8 * math.sin(k / 5.1), 1)
+            d += dt.timedelta(days=1)
+        days = sorted(hist)
+        score = hist[days[-1]]
+        back = lambda n: hist[days[-1 - n]] if len(days) > n else None  # noqa: E731
+        return {"score": score, "rating": fg_rating(score), "asof": timeutil.iso(), "previous_close": back(1),
+                "week_ago": back(5), "month_ago": back(21), "year_ago": back(252), "history": hist}
 
     def dividends(self):
         return []

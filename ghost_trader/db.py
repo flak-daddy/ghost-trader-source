@@ -54,6 +54,9 @@ CREATE TABLE splits(symbol TEXT NOT NULL, day TEXT NOT NULL, ratio REAL NOT NULL
   PRIMARY KEY(symbol, day));
 CREATE TABLE reports(id INTEGER PRIMARY KEY, ts TEXT NOT NULL, data TEXT NOT NULL);
 """,
+    2: """
+CREATE TABLE trade_readings(event_id INTEGER PRIMARY KEY, asof TEXT NOT NULL, data TEXT NOT NULL);
+""",
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

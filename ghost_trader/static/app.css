@@ -133,3 +133,23 @@ input.bad{border-color:var(--down)}
 .helplink{font-size:12px;color:var(--accent);margin-left:8px;cursor:pointer}
 .manual,.manual *,.helptoc,.helptoc *{font-feature-settings:normal;font-variant-numeric:normal}
 .manual th,.manual td{white-space:normal}
+
+/* indicators */
+.igroup{padding:10px 12px 6px}.gtitle{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:600;margin-bottom:4px}
+.igroup>.ichart+.ichart{border-top:1px solid var(--line);margin-top:4px;padding-top:6px}
+.ihead{display:flex;align-items:center;gap:10px;font-size:13px}.ihead .meta{margin-left:auto}
+.ileg{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--dim)}.ileg svg{margin-left:6px}
+.itip{position:absolute;display:none;pointer-events:none;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12.5px;min-width:190px;box-shadow:0 8px 24px var(--shadow);z-index:5}
+.itip .row{display:flex;justify-content:space-between;gap:14px;margin-top:2px}
+.istoch td{padding:3px 6px}.istoch tr.cur td{background:var(--sel)}.istoch tr.click{cursor:pointer}
+.rd{margin-top:3px;font-size:12px}.rdt td,.rdt th{font-size:12px;padding:4px 5px}
+.ichart > svg{cursor:crosshair}.itip.pinned{border-color:color-mix(in srgb,var(--warn) 60%,var(--line))}
+.itip .ifoot{margin-top:6px;font-size:9.5px;letter-spacing:.06em;text-align:center}.ipx{pointer-events:auto;cursor:pointer;color:var(--dim);display:inline-flex}
+.rd.lnk,.rdt tr.lnk{cursor:pointer}
+.stochpanel{margin-top:10px;border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));border-radius:8px;background:color-mix(in srgb,var(--accent) 6%,var(--panel));padding:0 0 4px}
+.stochpanel .ichart{padding:6px 0 0}.stochpanel .ihead{padding:0 10px}
+.stochpanel.tblmode{display:flex;align-items:center;padding:0}
+.stabs{display:flex;gap:2px;padding:0 6px;border-bottom:1px solid color-mix(in srgb,var(--accent) 22%,var(--line))}
+.stochpanel.tblmode .stabs{border-bottom:0}
+.stabs button{background:none;border:0;border-bottom:2px solid transparent;color:var(--dim);font:inherit;font-size:13px;padding:8px 14px 7px;cursor:pointer;margin-bottom:-1px}
+.stabs button:hover{color:var(--text)}.stabs button.on{color:var(--text);font-weight:600;border-bottom-color:var(--accent)}

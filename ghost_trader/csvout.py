@@ -11,18 +11,27 @@ def _ev_rows(led, run_id):
     for e in led.db.q("SELECT * FROM events WHERE run_id=? ORDER BY ts, id", (run_id,)):
         tags = " ".join(t[0] for t in led.db.q("SELECT tag FROM event_tags WHERE event_id=? ORDER BY tag", (e["id"],)))
         data = json.loads(e["data"] or "{}")
+        rd = led.db.one("SELECT data FROM trade_readings WHERE event_id=?", (e["id"],))
+        rd = json.loads(rd[0]) if rd else {}
         ts = timeutil.parse(e["ts"])
         out.append([
             ts.astimezone(timeutil.CT).strftime("%Y-%m-%d"), ts.astimezone(timeutil.CT).strftime("%H:%M CT"),
             e["kind"], "error" if e["is_error"] else ("warning" if e["is_warning"] else ""),
             e["title"], e["detail"], tags, data.get("close_note", ""),
             data.get("what", ""), data.get("did", ""), data.get("todo", ""),
+            *[_v(rd.get(k)) for k in READING_KEYS],
         ])
     return out
 
 
+READING_KEYS = ("stoch14_k", "stoch14_d", "stoch30_k", "stoch60_k", "stoch180_k", "vix", "fg", "fg_rating")
 HEAD = ["date", "time", "kind", "level", "event", "details", "tags", "close reason", "what happened",
-        "what the app did", "what you can do"]
+        "what the app did", "what you can do", "stoch 14,3,3 %K", "stoch 14,3,3 %D", "stoch 30", "stoch 60",
+        "stoch 180", "VIX", "fear & greed", "fear & greed rating"]
+
+
+def _v(x):
+    return "" if x is None else x
 
 
 def history_csv(led, run_id):

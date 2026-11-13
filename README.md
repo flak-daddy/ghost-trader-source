@@ -12,7 +12,7 @@ cash-secured puts, and share buys and sells. You make every trade decision; the 
 
 ## Manual
 
-New to options? Read **[MANUAL.md](MANUAL.md)**: cash-secured puts, covered calls and the wheel, TQQQ's risks, and a walkthrough of every screen. The same manual is in the app's **Help** tab (works offline, key `6`), and each release has it attached as a PDF and plain text.
+New to options? Read **[MANUAL.md](MANUAL.md)**: cash-secured puts, covered calls and the wheel, TQQQ's risks, and a walkthrough of every screen. The same manual is in the app's **Help** tab (works offline, key `7`), and each release has it attached as a PDF and plain text.
 
 ## Rules the app enforces
 
@@ -41,6 +41,10 @@ New to options? Read **[MANUAL.md](MANUAL.md)**: cash-secured puts, covered call
   `libnotify` and a notification daemon such as `mako`.
 
 The full design lives in the project spec (`ghost-trader-spec.md` in the Claude project).
+
+## Indicators
+
+The **Indicators** tab (key `3`) charts TQQQ's stochastic oscillator (14,3,3 slow, plus raw 30, 60 and 180-day), the VIX, and CNN's Fear & Greed index over 3M / 6M / 1Y / 2Y. TQQQ and the VIX come from Yahoo; Fear & Greed is read from the data CNN's own page uses (no official feed, so it can break if CNN changes its site; the tab says so and shows the rest). Every trade saves the readings at that moment; they show in History, trade details and the CSV exports.
 
 ## Install (Arch Linux)
 

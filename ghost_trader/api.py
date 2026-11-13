@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import SYMBOL, __version__, config, csvout, db as dbm, events, manual, marketcal, notify, perf, timeutil
+from . import SYMBOL, __version__, config, csvout, db as dbm, events, indicators, manual, marketcal, notify, perf, timeutil
 from .ledger import Ledger, TradeError, cents, money, strike_txt
 from .market import DemoProvider, Quotes, Rates, YahooProvider
 from .startup import Startup
@@ -32,6 +32,7 @@ class App:
         self.provider = provider or (DemoProvider() if demo else YahooProvider())
         self.rates = Rates(self.db, self.settings, self.provider)
         self.quotes = Quotes(self.db, self.provider, self.rates)
+        self.ind = indicators.Indicators(self.provider)
         self.startup = Startup(self)
         self.data_asof = None
         self.loaded = threading.Event()
@@ -133,6 +134,7 @@ class App:
                 "close_txt": timeutil.fmt_ct(lc, with_et=True)}
 
     def api_state(self):
+        self.ind.warm()
         S = self.price()
         r = self.led.run()
         u = {}
@@ -277,6 +279,7 @@ class App:
 
     def api_ticket(self, order, fresh=False):
         """Quote + rule check + effects + compare tables for the ticket side panel."""
+        self.ind.warm()
         o = dict(order)
         try:
             q = self._quote_for(o, fresh)
@@ -412,7 +415,55 @@ class App:
         except Exception as e:  # noqa: BLE001
             log.exception("place failed")
             return {"error": f"The trade wasn't placed: {e}"}
+        self._stamp_readings(res.get("event_id"))
         return {"ok": True, **res}
+
+    def _stamp_readings(self, event_id):
+        """Save the current indicator readings with a trade. Never blocks the trade; skipped if nothing is available."""
+        if not event_id:
+            return
+        try:
+            if self.ind.stale(ttl=30 * 60):
+                self.ind.warm()
+                self.ind.wait_warm(12)
+            snap = self.ind.snapshot()
+            if snap:
+                with self.db.tx():
+                    self.db.x("INSERT OR REPLACE INTO trade_readings(event_id,asof,data) VALUES(?,?,?)",
+                              (event_id, snap["asof"], json.dumps(snap)))
+        except Exception:  # noqa: BLE001
+            log.exception("couldn't save indicator readings")
+
+    def _readings(self, event_id):
+        r = self.db.one("SELECT data FROM trade_readings WHERE event_id=?", (event_id,))
+        return json.loads(r[0]) if r else None
+
+    def _position_readings(self, pid):
+        """Readings saved on each trade of a position, oldest first."""
+        out = []
+        for e in self.db.q("SELECT e.id, e.ts, e.data, r.data FROM events e JOIN trade_readings r ON r.event_id=e.id "
+                           "WHERE e.position_id=? ORDER BY e.ts, e.id", (pid,)):
+            act = json.loads(e[2] or "{}").get("action", "")
+            f = _fmt_ts(e[1])
+            out.append({"when": f["d"], "day": f["day"], "label": ACTION_WORDS.get(act, "Trade"), **json.loads(e[3])})
+        return out
+
+    # ------------------------------------------------------------------ indicators
+    def api_indicators(self, range="3M", refresh=False):
+        months = {"3M": 3, "6M": 6, "1Y": 12, "2Y": 24}.get(range, 3)
+        if refresh:
+            self.ind.refresh(force=True)
+        elif self.ind.stale():
+            self.ind.wait_warm(20)
+            if self.ind.stale():
+                self.ind.refresh()
+        v = self.ind.view(months)
+        v["range"] = range if range in ("3M", "6M", "1Y", "2Y") else "3M"
+        for st in v["status"].values():
+            if st["at"]:
+                st["at_txt"] = timeutil.fmt_ct(st["at"], with_date=True)
+        v["market"] = self._market()
+        return v
 
     # ------------------------------------------------------------------ position panel
     def api_position(self, id):
@@ -433,7 +484,7 @@ class App:
         sign = 1 if p["side"] == "short" else -1
         pnl = cents((p["open_price"] - q["mid"]) * 100 * p["open_qty"]) * sign if q else None
         prem = cents(p["open_price"]) * 100 * p["open_qty"]
-        return {**_pubpos(p), "quote": q, "pnl_c": pnl, "pnl_pct": pnl / prem if (pnl is not None and prem) else None,
+        return {**_pubpos(p), "readings": self._position_readings(p["id"]), "quote": q, "pnl_c": pnl, "pnl_pct": pnl / prem if (pnl is not None and prem) else None,
                 "premium_c": prem, "interest_c": cents(coll / 100 * rate / 100 * max(dte, 0) / 365), "dte": dte,
                 "price": S, "dist": (S - p["strike"]) / p["strike"] if S else None,
                 "otm": (S > p["strike"]) if p["type"] == "put" else (S < p["strike"])}
@@ -460,7 +511,7 @@ class App:
         settle = next((e for e in self.db.q("SELECT data FROM events WHERE position_id=? AND kind IN "
                                             "('Expired','Assigned','Called away','Exercised')", (p["id"],))), None)
         close_px = json.loads(settle[0]).get("close") if settle else None
-        return {**_pubpos(p), "finished": True, "outcome": outcome, "events": evs, "close_notes": close_notes,
+        return {**_pubpos(p), "readings": self._position_readings(p["id"]), "finished": True, "outcome": outcome, "events": evs, "close_notes": close_notes,
                 "bought_back": bought_back, "premium_c": cents(p["open_price"]) * 100 * p["qty"],
                 "result_c": p["realized_c"], "interest_c": cents(self.led.interest_on_collateral(p)),
                 "opened_day": timeutil.fmt_date(opened), "ended_day": ended and timeutil.fmt_date(ended),
@@ -487,7 +538,7 @@ class App:
                 continue
             out.append({"id": e["id"], **f, "kind": e["kind"], "title": e["title"], "detail": e["detail"], "tags": tags,
                         "err": bool(e["is_error"]), "warn": bool(e["is_warning"]), "data": json.loads(e["data"] or "{}"),
-                        "lot_id": e["lot_id"], "position_id": e["position_id"],
+                        "lot_id": e["lot_id"], "position_id": e["position_id"], "readings": self._readings(e["id"]),
                         "share_event": e["kind"] in ("Assigned", "Called away", "Shares", "Exercised") and e["lot_id"]})
         total = self.db.val("SELECT COUNT(*) FROM events WHERE run_id=? OR run_id IS NULL", (rid,), 0)
         return {"events": out, "total": total, "tags": self._all_tags()}
@@ -898,6 +949,10 @@ def _days(a, b):
     while d <= b:
         yield d
         d += dt.timedelta(days=1)
+
+
+ACTION_WORDS = {"sell_to_open": "Opened", "buy_to_open": "Opened", "buy_to_close": "Closed", "sell_to_close": "Closed",
+                "buy_shares": "Bought shares", "sell_shares": "Sold shares"}
 
 
 def _pubpos(p):

@@ -11,10 +11,11 @@
 3. [Cash-secured puts](#cash-secured-puts)
 4. [Covered calls and the wheel](#covered-calls-and-the-wheel)
 5. [TQQQ and its risks](#tqqq-and-its-risks)
-6. [Using Ghost Trader](#using-ghost-trader)
-7. [Your first trade, step by step](#your-first-trade-step-by-step)
-8. [Glossary](#glossary)
-9. [Further reading](#further-reading)
+6. [Indicators](#indicators)
+7. [Using Ghost Trader](#using-ghost-trader)
+8. [Your first trade, step by step](#your-first-trade-step-by-step)
+9. [Glossary](#glossary)
+10. [Further reading](#further-reading)
 
 ---
 
@@ -289,6 +290,73 @@ The fund rebalances once a day, but the market can move a lot between one close 
 
 ---
 
+## Indicators
+
+Ghost Trader's **Indicators** tab shows three common ways traders read the market: the stochastic oscillator on TQQQ, the VIX, and CNN's Fear & Greed index. This part explains what each one measures. None of them predicts prices. They describe where things stand right now compared with the recent past.
+
+### The stochastic oscillator
+
+The stochastic oscillator asks one question: **where did the latest close land within the recent high-to-low range?** It's a number from 0 to 100:
+
+> **%K = 100 × (latest close − lowest low) ÷ (highest high − lowest low)**, over the last *n* trading days
+
+- **100** means TQQQ closed at the very top of its range for that period.
+- **0** means it closed at the very bottom.
+- **50** means it closed in the middle.
+
+Readings of **80 and above** are traditionally called *overbought*, and **20 and below** *oversold*. Those labels only describe where the price sits in its range. A strong trend can stay overbought or oversold for a long time.
+
+The **lookback** (*n*) sets how much history the range covers. Ghost Trader shows four:
+
+| Setting | What it covers | How it behaves |
+|---|---|---|
+| 14,3,3 | The last 14 trading days (about 3 weeks) | Moves quickly with short swings |
+| 30-day | About 6 weeks | Slower |
+| 60-day | About 3 months | Slower still |
+| 180-day | About 9 months | Shows where TQQQ sits in its longer-range trend |
+
+The **14,3,3** setting is the classic "slow stochastic." The two 3s add smoothing:
+
+- **%K** is the raw 14-day reading averaged over 3 days, which takes out some day-to-day noise.
+- **%D** is a 3-day average of that %K. It lags behind %K, and traders watch where the two lines cross.
+
+The 30, 60 and 180-day settings show the raw %K line only, with no smoothing and no %D.
+
+### The VIX
+
+The **VIX** is the CBOE Volatility Index. It's calculated from S&P 500 option prices and shows how much movement the options market expects over the next 30 days, as a yearly percentage. A VIX of 20 means the market is pricing in moves of roughly 20% a year for the S&P 500.
+
+- **Low VIX** (low teens): the market expects calm.
+- **High VIX** (30 and above): the market expects big swings. That usually happens during sell-offs.
+
+The VIX is about the S&P 500, not TQQQ. TQQQ's own option prices usually imply volatility several times higher. The two tend to rise together, though, and when the VIX jumps, TQQQ option premiums generally jump too.
+
+### CNN Fear & Greed
+
+CNN's **Fear & Greed index** combines seven market measures (including stock momentum, the VIX, demand for junk bonds versus safe assets, and put versus call buying) into one score from 0 to 100:
+
+| Score | CNN's label |
+|---|---|
+| 0–24 | Extreme fear |
+| 25–44 | Fear |
+| 45–55 | Neutral |
+| 56–75 | Greed |
+| 76–100 | Extreme greed |
+
+CNN doesn't publish an official data feed. Ghost Trader reads the same data CNN's own web page loads. If CNN changes its site, this can stop working without warning. The tab then says Fear & Greed is unavailable and keeps showing everything else.
+
+### Readings saved with your trades
+
+Every time you place a trade, Ghost Trader saves the current readings with it: all four stochastic values, the VIX, and Fear & Greed. You'll see them:
+
+- under the trade in **History**,
+- in the **Market at each trade** table in a position's details,
+- and as extra columns in the History and run **CSV** exports.
+
+Double-click a trade's readings in either place to open the Indicators tab on that date, with the day pinned. This lets you look back later at what the market looked like when you made each decision. If the data can't be fetched at that moment, the trade still goes through, just without readings.
+
+---
+
 ## Using Ghost Trader
 
 ### What Ghost Trader is, and isn't
@@ -421,6 +489,20 @@ Click **Review trade** to see a summary, then **Confirm** (or press Enter). **Tr
 | Shares are sold only if free | Shares covering a call can't be sold until the call is closed or expires. |
 | No fees | No commissions are charged. |
 
+### The Indicators tab
+
+Readings for TQQQ, the VIX and Fear & Greed, explained in [Indicators](#indicators).
+
+- **Cards:** TQQQ's latest price, the four stochastic readings (with whether each rose or fell since the day before), the VIX with its 1-year range, and Fear & Greed with its readings from the prior close, 1 week, 1 month and 1 year ago.
+- **Range** (top right): 3M, 6M, 1Y, 2Y set how much history every chart and the table cover. The tab opens on 3M. Chart/Table and Refresh sit next to it.
+- **TQQQ group:** the price chart, with the stochastic below it in its own tinted panel. Tabs along the top of that panel (14,3,3 · 30-day · 60-day · 180-day) choose which stochastic it draws. Clicking a row in the stochastic card does the same. In the table view the same tabs choose the stochastic column.
+- **Market mood group:** the VIX and Fear & Greed charts.
+- **Charts:** all on the same dates. Hover anywhere to see every value for that day. **Click** to pin that day's box (Esc or its × unpins), and **double-click** a day to open History for that day.
+- **Table:** the same numbers day by day, newest first.
+- **Refresh** fetches everything again. Otherwise data is fetched when you open the tab and reused for 15 minutes.
+
+If one source can't be reached, a note says which, and the rest still shows.
+
 ### Position details
 
 Click a position (or its dot in the Chain) to open its details:
@@ -489,7 +571,7 @@ Each chart can be switched to a table view.
 ### Navigating
 
 - **Double-click** any underlined item to jump to it.
-- **1–6** switch tabs (Portfolio, Chain, History, Performance, Settings, Help).
+- **1–7** switch tabs (Portfolio, Chain, Indicators, History, Performance, Settings, Help).
 - **Esc** closes a panel or ticket.
 - **Enter** confirms.
 - All times are **Central**, with Eastern in parentheses in most places.
@@ -531,13 +613,17 @@ This walks through selling one cash-secured put. Read it with Ghost Trader open.
 | Collateral | Cash set aside to secure a short put. |
 | Covered call | A call sold against 100 shares you own per contract. |
 | Delta | How much an option's price moves per $1 move in the stock. Also used as a rough chance of finishing in the money. |
+| %D | In the 14,3,3 stochastic, a 3-day average of %K. |
+| %K | The stochastic reading: where the close sits in the recent high-to-low range, 0 to 100. |
 | DTE | Days to expiration. |
 | Ex-dividend date | The first day a share trades without the right to its next dividend. |
 | Exercise | Using an option's right to buy or sell. |
 | Expiration | The last day an option exists. |
+| Fear & Greed | CNN's 0–100 score of market mood, built from seven measures. |
 | Implied volatility (IV) | How much the market expects the stock to move, read from option prices. |
 | In the money (ITM) | A put with the stock below the strike, or a call with the stock above it. |
 | Intrinsic value | The part of an option's price equal to how far it's in the money. |
+| Lookback | How many days of history an indicator covers. |
 | Lot | A group of shares bought at one time and price. |
 | Mark | The current value Ghost Trader uses for an open option (the mid). |
 | Mid | Halfway between the bid and the ask. |
@@ -548,9 +634,11 @@ This walks through selling one cash-secured put. Read it with Ghost Trader open.
 | Run | One paper account in Ghost Trader, from starting cash to close. |
 | Sell to open | Selling an option to start a position. |
 | Spread | The gap between the bid and the ask. |
+| Stochastic oscillator | A 0–100 reading of where the latest close sits within the high-to-low range of the last *n* days. |
 | Strike | The price at which an option's shares are bought or sold. |
 | Time decay | The loss of an option's time value as expiration approaches. |
 | Time value | The part of an option's price beyond its intrinsic value. |
+| VIX | The CBOE Volatility Index: how much movement S&P 500 options are pricing in. |
 | Volatility decay | The tendency of a daily-leveraged fund to lose ground in a choppy market. |
 | Wheel | Cycling between cash-secured puts and covered calls. |
 
@@ -561,6 +649,8 @@ This walks through selling one cash-secured put. Read it with Ghost Trader open.
 - [Characteristics and Risks of Standardized Options](https://www.theocc.com/company-information/documents-and-archives/options-disclosure-document): the official options risk booklet from the Options Clearing Corporation. Brokers must give it to you before you can trade options.
 - [ProShares UltraPro QQQ (TQQQ)](https://www.proshares.com/our-etfs/leveraged-and-inverse/tqqq): the fund's own page, with its objective, fees and holdings.
 - [The Lowdown on Leveraged and Inverse Exchange-Traded Products](https://www.finra.org/investors/insights/lowdown-leveraged-and-inverse-exchange-traded-products): FINRA's explainer on daily-reset funds.
+- [CNN Fear & Greed Index](https://www.cnn.com/markets/fear-and-greed): CNN's page for the index, with an explanation of its seven measures.
+- [Cboe VIX Index](https://www.cboe.com/tradable_products/vix/): how the VIX is calculated.
 - [SEC investor bulletin on leveraged and inverse ETFs](https://www.investor.gov/introduction-investing/general-resources/news-alerts/alerts-bulletins/investor-alerts/sec-finra): why these funds behave differently over longer periods.
 
 The TQQQ figures in this manual (the daily 3× objective, launch date, fees, and the 2022 drawdown) come from these sources and public price history as of late 2026.
