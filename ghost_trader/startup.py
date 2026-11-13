@@ -361,20 +361,19 @@ class Startup:
         except Exception:  # noqa: BLE001
             pass
         for e in exps:
-            got = None
+            held = [p for p in pos if p["expiry"] == e]
+            bad = held
             for _ in range(2):
                 try:
                     got = a.quotes.chain(e, fresh=True)
-                    if not got["stale"]:
+                    bad = _not_refreshed(got, held)
+                    if not bad:
                         break
-                except Exception as ex:  # noqa: BLE001
-                    got = {"error": str(ex), "stale": True, "rows": []}
+                except Exception:  # noqa: BLE001
+                    bad = held
                 time.sleep(0.3)
-            n = sum(1 for p in pos if p["expiry"] == e)
-            if got and not got["stale"]:
-                fresh += n
-            else:
-                stale += [p for p in pos if p["expiry"] == e]
+            fresh += len(held) - len(bad)
+            stale += bad
         if stale:
             names = ", ".join(p["label"] for p in stale)
             choice, _ = self._ask("quotes", "Some quotes didn't refresh",
@@ -463,3 +462,35 @@ def market_line(ts=None):
     ts = ts or timeutil.now()
     st, lbl = marketcal.market_status(ts)
     return st, lbl
+
+
+def _session_start(now):
+    """Start (8:30 AM CT) of the latest trading session that has begun."""
+    now_c = now.astimezone(timeutil.CT)
+    d = now_c.date()
+    if not marketcal.is_trading_day(d) or now_c.time() < dt.time(8, 30):
+        d = marketcal.prev_trading_day(d)
+    return dt.datetime.combine(d, dt.time(8, 30), tzinfo=timeutil.CT)
+
+
+def _not_refreshed(chain, held, now=None):
+    """Held positions whose own contract has no usable current quote. Other strikes falling back to their last good
+    quote (common after hours, when Yahoo blanks far-away strikes) don't count. With the market closed, a held
+    contract's quote from the latest session (e.g. the close) counts as current: that's what trading uses then."""
+    now = now or timeutil.now()
+    closed = not marketcal.is_open(now)
+    since = _session_start(now)
+    rows = {(r["type"], r["strike"]): r for r in chain.get("rows", [])}
+    out = []
+    for p in held:
+        r = rows.get((p["type"], p["strike"]))
+        ok = r is not None and bool(r.get("bid") or r.get("ask"))
+        if ok and r.get("fallback"):
+            try:
+                ok = closed and timeutil.parse(r["asof"]) >= since
+            except Exception:  # noqa: BLE001
+                ok = False
+        if not ok:
+            out.append(p)
+    return out
+

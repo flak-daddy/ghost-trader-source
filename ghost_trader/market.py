@@ -476,7 +476,8 @@ class Quotes:
                         # Yahoo often blanks bid/ask outside market hours: fall back to the last good quote.
                         g = self.db.one("SELECT bid, ask, iv, asof FROM quotes WHERE contract=?", (key,))
                         if g and (g["bid"] or g["ask"]):
-                            r.update(bid=g["bid"] or 0.0, ask=g["ask"] or 0.0, iv=r.get("iv") or g["iv"], asof=g["asof"])
+                            r.update(bid=g["bid"] or 0.0, ask=g["ask"] or 0.0, iv=r.get("iv") or g["iv"], asof=g["asof"],
+                                     fallback=True)
                             stale = True
         except Exception as e:  # noqa: BLE001
             log.warning("chain %s failed: %s", expiry, e)
@@ -485,7 +486,7 @@ class Quotes:
             if not got:
                 raise DataError(f"No quotes for {expiry}: {e}")
             rows = [{"type": g["type"], "strike": g["strike"], "bid": g["bid"] or 0.0, "ask": g["ask"] or 0.0,
-                     "last": g["last"], "iv": g["iv"], "asof": g["asof"]} for g in got]
+                     "last": g["last"], "iv": g["iv"], "asof": g["asof"], "fallback": True} for g in got]
             asof = min(g["asof"] for g in got)
             stale = True
         self._enrich(rows, expiry)
