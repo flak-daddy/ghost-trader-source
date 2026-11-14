@@ -532,6 +532,8 @@ The ticket opens on the right. It shows:
 
   **Payoff** (sell-to-open tickets): the trade's profit or loss across TQQQ prices, at expiration (solid), halfway there (dotted) and today (dashed), with the breakeven, TQQQ now and the most you can make marked. Hover for the values at any price. For a covered call it shows your shares (valued from today's price) plus the call, which is the position you actually hold.
 
+  **Where TQQQ could be by expiration** (sell-to-open tickets, under the payoff): the same small cone as a position's panel, for the option on the ticket before you sell it. It shows TQQQ's last month, the 68% (inner) and 95% (outer) bands out to this expiration from this option's IV, and the strike as a dashed line. It follows the ticket when you change the expiration, strike or put/call. Hover it for the chances on a specific date, including the chance TQQQ closes past the strike.
+
   Very unlikely or very likely outcomes show as **<1%** or **>99%**, never a flat 0% or 100%: a far out-of-the-money put with a week left really can be a fraction of a percent from assignment, but it's never impossible.
 
   Yahoo sometimes reports a junk implied volatility, especially for far out-of-the-money or quiet contracts (near zero after hours, or thousands of percent). Anything under 5% or over 500% is treated as junk: Ghost Trader works the IV out from the option's own mid price instead and marks it **(from price)**. If the price can't explain it either, it borrows the nearest strike's IV and marks it **(nearest strike)**. The same repaired IV is used for the quote line's IV and the chain's delta.

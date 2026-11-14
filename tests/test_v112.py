@@ -91,3 +91,17 @@ def test_earnings_table_nearest_first_with_estimates(tmp_path, monkeypatch):
     assert {r["symbol"] for r in est} == {"AAPL", "AMZN"}
     assert all(r["days_to"] >= 0 for r in est)
     assert [r["symbol"] for r in rows] != list(a.EARNINGS)  # demo dates are out of list order
+
+
+def test_cone_for_ticket_option(tmp_path, monkeypatch):
+    monkeypatch.setenv("GHOST_TRADER_HOME", str(tmp_path))
+    from ghost_trader.api import App
+    a = App(demo=True)
+    a.ind.refresh()
+    ex = (timeutil.today_ct() + dt.timedelta(days=20)).isoformat()
+    d = a.api_cone(days_back=30, type="put", strike=50, expiry=ex, iv=0.7)
+    assert d["iv"] == 0.7 and d["iv_src"] == "this option's IV"
+    assert len(d["positions"]) == 1
+    p = d["positions"][0]
+    assert p["strike"] == 50 and p["type"] == "put" and p["dte"] == 20 and "(this ticket)" in p["label"]
+    assert d["horizon"] == 20

@@ -363,7 +363,7 @@ class App:
             out["chances"] = self._chances(o["type"], S, k, px, dte, (q or {}).get("iv"), rate, (q or {}).get("iv_src"))
             if q and q.get("iv") and S and px:
                 out["payoff"] = {"type": o["type"], "strike": k, "premium": px, "qty": qty, "S": S, "iv": q["iv"],
-                                 "dte": dte, "rate": rate / 100, "covered": o["type"] == "call"}
+                                 "dte": dte, "rate": rate / 100, "covered": o["type"] == "call", "expiry": o["expiry"]}
         # strikes available (with a bid) for this expiry/type, and the expiration list
         try:
             c = self.quotes.chain(o["expiry"])
@@ -1278,9 +1278,10 @@ class App:
         return self._save_text(r["csv_name"], r["csv_text"])
 
     # ------------------------------------------------------------------ probability cones (v1.10.0)
-    def api_cone(self, id=None, days_back=60):
+    def api_cone(self, id=None, days_back=60, type=None, strike=None, expiry=None, iv=None):
         """What the cone charts need: recent TQQQ closes, today's price, the IV the cone uses, and the open options
-        to draw against it (one position for the panel's mini cone, all of them for Portfolio)."""
+        to draw against it (one position for the panel's mini cone, all of them for Portfolio). With type/strike/
+        expiry (and the quote's iv), it's the ticket's mini cone for an option you haven't sold yet (v1.12.3)."""
         S = self.price()
         if not S:
             return {"error": "No TQQQ price yet."}
@@ -1295,10 +1296,20 @@ class App:
             closes[-1] = (closes[-1][0], S)
         else:
             closes.append((today.isoformat(), S))
-        ps = self.led.positions()
+        prospect = strike is not None and expiry and type in ("put", "call")
+        ps = [] if prospect else self.led.positions()
         if id is not None:
             ps = [p for p in ps if p["id"] == int(id)]
         pos, ivs = [], []
+        if prospect:
+            k, ex = float(strike), dt.date.fromisoformat(str(expiry))
+            iv = float(iv) if iv else None
+            if iv:
+                ivs.append(iv)
+            pos.append({"id": None, "type": type, "side": "short", "strike": k, "expiry": ex.isoformat(), "qty": None,
+                        "label": f"{timeutil.fmt_exp(ex)} {strike_txt(k)} {type.title()} (this ticket)",
+                        "dte": (ex - today).days, "iv": iv})
+            id = "ticket"
         for p in ps:
             q = None
             try:

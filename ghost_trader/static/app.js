@@ -408,10 +408,10 @@ function renderTicket() {
   if (tk.action === "sell_to_open" && tk.type === "put") effects = `<div class=row><label>Premium → Available now</label><span class=up>${mc(ef.premium_c || 0, true)}</span></div>
       <div class=row><label>Collateral set aside</label><span>${mc(ef.collateral_c || 0)}</span></div>
       <div class=row><label>Interest on collateral to expiry @ ${f2(d.rate)}%</label><span class=up>${mc(d.interest_c || 0, true)}</span></div>
-      <div class=row data-tip="${pct(d.ret, 2)} over ${plural(d.dte, "day")} (premium + interest on the collateral, against the collateral) ≈ ${pct(d.ann)} a year if repeated back-to-back for a year. A comparison yardstick, not a forecast."><label>Return if it expires worthless</label><span><b>${pct(d.ret, 2)}</b></span></div>${chancesRows(d.chances, tk.type)}<div id=tkPayoff></div>`;
+      <div class=row data-tip="${pct(d.ret, 2)} over ${plural(d.dte, "day")} (premium + interest on the collateral, against the collateral) ≈ ${pct(d.ann)} a year if repeated back-to-back for a year. A comparison yardstick, not a forecast."><label>Return if it expires worthless</label><span><b>${pct(d.ret, 2)}</b></span></div>${chancesRows(d.chances, tk.type)}<div id=tkPayoff></div><div id=tkCone></div>`;
   else if (tk.action === "sell_to_open") effects = `<div class=row><label>Premium → Available now</label><span class=up>${mc(ef.premium_c || 0, true)}</span></div>
       <div class=row><label>Shares locked as cover</label><span>${(tk.qty || 0) * 100}</span></div>
-      <div class=row data-tip="${pct(d.ret, 2)} over ${plural(d.dte, "day")} (premium against the value of the 100 shares per contract covering it) ≈ ${pct(d.ann)} a year if repeated back-to-back for a year. A comparison yardstick, not a forecast."><label>Return if it expires worthless</label><span><b>${pct(d.ret, 2)}</b></span></div>${chancesRows(d.chances, tk.type)}<div id=tkPayoff></div>`;
+      <div class=row data-tip="${pct(d.ret, 2)} over ${plural(d.dte, "day")} (premium against the value of the 100 shares per contract covering it) ≈ ${pct(d.ann)} a year if repeated back-to-back for a year. A comparison yardstick, not a forecast."><label>Return if it expires worthless</label><span><b>${pct(d.ret, 2)}</b></span></div>${chancesRows(d.chances, tk.type)}<div id=tkPayoff></div><div id=tkCone></div>`;
   else if (tk.action === "buy_to_close") effects = `<div class=row><label>Cost out${tk.type === "put" ? " (from this position's collateral)" : ""}</label><span class=down>${mc(-(ef.cost_c || 0))}</span></div>
       ${tk.type === "put" ? `<div class=row><label>Collateral released</label><span>${mc((ef.collateral_released_c || 0) - (ef.cost_c || 0))}</span></div>` : `<div class=row><label>Shares unlocked</label><span>${(tk.qty || 0) * 100}</span></div>`}
       ${ef.result_c != null ? `<div class=row><label>Result on these contracts</label><span class="${ef.result_c >= 0 ? "up" : "down"}">${mc(ef.result_c, true)}</span></div>` : ""}`;
@@ -451,7 +451,16 @@ function renderTicket() {
   const n = $("#tkNote"); if (n) n.oninput = () => tk.note = n.value;
   const tg = $("#tkTag"); if (tg) tg.onkeydown = e => { if (e.key === "Enter" && tg.value.trim()) { let v = tg.value.trim().toLowerCase().replace(/\s+/g, "-"); if (!v.startsWith("#")) v = "#" + v; if (!tk.tags.includes(v)) tk.tags.push(v); renderTicket(); setTimeout(() => $("#tkTag") && $("#tkTag").focus(), 0); } };
   $("#reviewBtn").onclick = showConfirm;
-  if (tk.action === "sell_to_open") drawPayoff($("#tkPayoff"), d.payoff);
+  if (tk.action === "sell_to_open") {
+    drawPayoff($("#tkPayoff"), d.payoff);
+    // v1.12.3: the same small cone as a position's panel, for the option on this ticket
+    const key = [tk.type, tk.strike, tk.expiry].join("|");
+    if (d.payoff) api("cone", {days_back: 30, type: tk.type, strike: d.payoff.strike, expiry: d.payoff.expiry, iv: d.payoff.iv}).then(cd => {
+      const el = $("#tkCone");
+      if (!el || cd.error || [tk.type, tk.strike, tk.expiry].join("|") !== key) return;
+      drawCone(el, cd, true);
+    });
+  }
 }
 
 /* Chances as text: never a flat 0% or 100%, which reads as "certain" when it's only very unlikely / very likely. */
@@ -947,7 +956,8 @@ function drawCone(el, d, mini) {
   const usd = x => "$" + f2(x);
   const showTip = (html, e) => { tipEl.innerHTML = html + `<div class=cnfoot>If TQQQ moves as its implied volatility (${(v * 100).toFixed(0)}%) says · not a forecast</div>`;
     tipEl.style.display = "block"; const r = el.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-    tipEl.style.left = (x > r.width - 320 ? x - tipEl.offsetWidth - 14 : x + 14) + "px"; tipEl.style.top = Math.max(0, y - tipEl.offsetHeight - 10) + "px"; };
+    const tw = tipEl.offsetWidth, lx = x + 14 + tw <= r.width ? x + 14 : x - tw - 14; /* right of the cursor if it fits, else left */
+    tipEl.style.left = Math.max(0, Math.min(lx, r.width - tw)) + "px"; /* never past the chart's edges (narrow ticket) */ tipEl.style.top = Math.max(0, y - tipEl.offsetHeight - 10) + "px"; };
   s.addEventListener("mousemove", e => { const b = s.getBoundingClientRect(), px = (e.clientX - b.left) * W / b.width, py = (e.clientY - b.top) * H / b.height;
     if (px < L || px > W - R) { tipEl.style.display = "none"; return; }
     let t = Xinv(px);
