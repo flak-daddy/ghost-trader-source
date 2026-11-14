@@ -52,13 +52,28 @@ A weekday timer (7:45 AM and 3:30 PM CT) sends desktop notifications even when t
 
 ## Install (Arch Linux)
 
-From the AUR, once the package is listed there:
+**Recommended: clone and run the setup script.** No GitHub account or key needed, and the app updates itself:
+at startup it offers new releases with their change list, one click to update.
+
+```
+sudo pacman -S --needed git python webkit2gtk-4.1 python-gobject
+mkdir -p ~/Projects && cd ~/Projects
+git clone https://github.com/flak-daddy/ghost-trader-source.git ghost-trader
+cd ghost-trader && ./install.sh
+ghost-trader --check
+```
+
+`install.sh` checks out the newest release, sets up a private Python environment in the folder, and adds
+Ghost Trader to your app menu and `~/.local/bin`. Keep the folder where it is; the app runs from it.
+
+**Or as a system package.** From the AUR, once the package is listed there:
 
 ```
 yay -S ghost-trader
 ```
 
-Until then, build it straight from this repo (yay pulls in the dependencies, including python-yfinance):
+Until then, build the package straight from this repo (yay pulls in the dependencies, including
+python-yfinance). A package built this way doesn't update itself: to update, pull this repo and build again.
 
 ```
 git clone https://github.com/flak-daddy/ghost-trader-source.git
