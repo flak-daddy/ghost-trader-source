@@ -174,3 +174,5 @@ input.bad{border-color:var(--down)}
 .cal .mynote{font-size:12px;padding:1px 6px;border-radius:4px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;background:color-mix(in srgb,var(--accent) 14%,transparent)}
 .cal .mynote.event{background:color-mix(in srgb,var(--accent) 30%,transparent);font-weight:600}
 .mktsoon .ev{font-size:12px;color:var(--text);background:color-mix(in srgb,var(--accent) 12%,transparent)}.mktsoon .ev.earn{background:color-mix(in srgb,var(--s3) 16%,transparent)}.cal .mynote svg{width:11px;height:11px;vertical-align:-1px}
+.cntip{position:absolute;display:none;pointer-events:none;z-index:5;max-width:300px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12.5px;line-height:1.4;box-shadow:0 6px 18px var(--shadow)}
+.cntip .meta{font-size:11.5px;margin-top:3px}.cntip .cnfoot{font-size:10.5px;color:var(--dim);margin-top:5px;border-top:1px solid var(--line);padding-top:4px}

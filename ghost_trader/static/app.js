@@ -933,13 +933,42 @@ function drawCone(el, d, mini) {
   function coneSum() { if (!d.positions.length) return "No open options: the cone shows TQQQ's likely range over the next month.";
     const p = d.positions.reduce((a, b) => b.dte > a.dte ? b : a); const t = day(p.expiry);
     return `By ${lbl(t)}: ${"$" + f2(band(t, -1))}–${"$" + f2(band(t, 1))} (68%) · ${"$" + f2(band(t, -2))}–${"$" + f2(band(t, 2))} (95%)`; }
-  s.addEventListener("mousemove", e => { const b = s.getBoundingClientRect(), px = (e.clientX - b.left) * W / b.width;
-    if (px < L || px > W - R) return; const t = Xinv(px);
-    xh.setAttribute("x1", px); xh.setAttribute("x2", px); xh.style.display = "";
+  // v1.12.1: hovering the cone says what it means, for a specific date
+  el.style.position = "relative";
+  const tipEl = document.createElement("div"); tipEl.className = "cntip"; el.appendChild(tipEl);
+  const Yinv = py => yhi - (py - Tp) / (H - Tp - B) * (yhi - ylo);
+  // whole days: k counts calendar days since 1970 (UTC), so labels never slip a day across time zones
+  const f0 = t0 - Math.floor(t0), kOf = t => Math.floor(t0) + Math.round(t - t0);
+  const dlong = t => new Date(kOf(t) * 864e5).toLocaleDateString("en-US", {weekday: "short", month: "short", day: "numeric", timeZone: "UTC"});
+  const snap = t => { let k = kOf(t); const wd = new Date(k * 864e5).getUTCDay(); if (wd === 6) k -= 1; if (wd === 0) k -= 2;
+    return Math.max(k + f0, t0 + 1); };
+  const pBelow = (t, K) => { const yr = Math.max(t - t0, 0.5) / 365; return jsN((Math.log(K / S0) - mu * yr) / (v * Math.sqrt(yr))); };
+  const pcs = x => x >= 0.995 ? ">99%" : x < 0.005 ? "<1%" : Math.round(x * 100) + "%";
+  const usd = x => "$" + f2(x);
+  const showTip = (html, e) => { tipEl.innerHTML = html + `<div class=cnfoot>If TQQQ moves as its implied volatility (${(v * 100).toFixed(0)}%) says · not a forecast</div>`;
+    tipEl.style.display = "block"; const r = el.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    tipEl.style.left = (x > r.width - 320 ? x - tipEl.offsetWidth - 14 : x + 14) + "px"; tipEl.style.top = Math.max(0, y - tipEl.offsetHeight - 10) + "px"; };
+  s.addEventListener("mousemove", e => { const b = s.getBoundingClientRect(), px = (e.clientX - b.left) * W / b.width, py = (e.clientY - b.top) * H / b.height;
+    if (px < L || px > W - R) { tipEl.style.display = "none"; return; }
+    let t = Xinv(px);
     if (t <= t0) { const h = hist.reduce((a, b) => Math.abs(b[0] - t) < Math.abs(a[0] - t) ? b : a, hist[0] || [t0, S0]);
-      read.innerHTML = `${lbl(h[0])} · TQQQ closed <b>$${f2(h[1])}</b>`; }
-    else read.innerHTML = `${lbl(t)} · 68%: <b>$${f2(band(t, -1))}–$${f2(band(t, 1))}</b> · 95%: $${f2(band(t, -2))}–$${f2(band(t, 2))}`; });
-  s.addEventListener("mouseleave", () => { xh.style.display = "none"; read.innerHTML = coneSum(); });
+      xh.setAttribute("x1", X(h[0])); xh.setAttribute("x2", X(h[0])); xh.style.display = "";
+      read.innerHTML = `${lbl(h[0])} · TQQQ closed <b>$${f2(h[1])}</b>`; tipEl.style.display = "none"; return; }
+    t = snap(t); const xx = X(t); xh.setAttribute("x1", xx); xh.setAttribute("x2", xx); xh.style.display = "";
+    const a1 = band(t, -1), b1 = band(t, 1), a2 = band(t, -2), b2 = band(t, 2), when = `at the close on <b>${dlong(t)}</b>`;
+    read.innerHTML = `${dlong(t)} · 68%: <b>${usd(a1)}–${usd(b1)}</b> · 95%: ${usd(a2)}–${usd(b2)}`;
+    // a strike line under the cursor takes priority
+    const hitPos = d.positions.find(p => Math.abs(py - Y(p.strike)) < 6 && t <= day(p.expiry) + 0.5 && (mini || px >= X(t0)));
+    if (hitPos) { const pb = pBelow(t, hitPos.strike), put = hitPos.type === "put";
+      showTip(`<b>${put ? pcs(pb) + " chance TQQQ closes below" : pcs(1 - pb) + " chance TQQQ closes above"} ${kTxt(hitPos.strike)}</b> ${when}<div class=meta>${esc(hitPos.label)}${mini ? "" : " ×" + hitPos.qty} strike · ${put ? "below it at expiration, the put is assigned" : "above it at expiration, the shares are called away"}</div>`, e); return; }
+    const p = Yinv(py);
+    if (p >= a1 && p <= b1) showTip(`<b>About 68% chance TQQQ closes between ${usd(a1)} and ${usd(b1)}</b> ${when}<div class=meta>the inner band</div>`, e);
+    else if (p >= a2 && p <= b2) { const up = p > b1;
+      showTip(`<b>About 95% chance TQQQ closes between ${usd(a2)} and ${usd(b2)}</b> ${when}<div class=meta>the outer band adds the edges: about 14% chance it closes between ${up ? usd(b1) + " and " + usd(b2) : usd(a2) + " and " + usd(a1)} (this side), and 14% on the other side</div>`, e); }
+    else { const up = p > b2;
+      showTip(`<b>About 2% chance TQQQ closes ${up ? "above " + usd(b2) : "below " + usd(a2)}</b> ${when}<div class=meta>outside the cone: about 5% chance in all, half on each side</div>`, e); }
+  });
+  s.addEventListener("mouseleave", () => { xh.style.display = "none"; tipEl.style.display = "none"; read.innerHTML = coneSum(); });
 }
 
 /* ---------- CONFIRM ---------- */

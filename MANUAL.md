@@ -448,7 +448,7 @@ The main screen. From top to bottom:
 - **Cards:** account value and return, Available, Collateral, Shares, premium collected this run, and interest earned (with the next pay date).
 - **Open options:** each position with contracts, the price you sold at, the current mark, collateral or shares covering, distance from the strike (and whether it's ITM or OTM), days to expiration (DTE), and P&L. Double-click a contract to open it in the Chain with its details panel. **Close** opens a buy-to-close ticket.
 - **Shares:** your lots, average cost, value and P&L, how many shares are covering calls and how many are free. **Buy shares…** opens a share ticket.
-- **Where TQQQ could go:** TQQQ's last few months, then a shaded cone from today out to your latest expiration. The darker inner band is where TQQQ would end up about 68% of the time if it moves as its implied volatility says; the lighter outer band about 95%. Each open option is drawn as its strike, from today to its expiration (puts in amber, calls in green). Hover the past for a close, the future for the cone's range on that date. The cone uses TQQQ's 30-day at-the-money IV (saved daily since v1.9.0). It says how far TQQQ might move, not which way.
+- **Where TQQQ could go:** TQQQ's last few months, then a shaded cone from today out to your latest expiration. The inner band (the brighter one in dark mode, the deeper one in light mode) is where TQQQ would end up about 68% of the time if it moves as its implied volatility says; the outer band, inner included, about 95%. Each open option is drawn as its strike, from today to its expiration (puts in amber, calls in green). Hover the past for a close. Hover the future and a box says what the cone means for that date: in the inner band, "about 68% chance TQQQ closes between $a and $b at the close on Fri, Dec 4"; in the outer band, the 95% range (and the 14% on that side); outside the cone, the chance it closes beyond the edge; on one of your strike lines, the chance TQQQ closes below a put's strike (or above a call's) on that date. The date snaps to the nearest weekday. The cone uses TQQQ's 30-day at-the-money IV (saved daily since v1.9.0). It says how far TQQQ might move, not which way.
 - A link to the **calendar**, which moved to the Market tab in v1.12.0.
 
 ### Alerts
@@ -578,7 +578,7 @@ Double-click a position on Portfolio, or its gold dot in the Chain, to open its 
 - what happens if it expires worthless, and what happens if it's assigned or called away,
 - your note and tags,
 - **Chances now:** chance of expiring worthless, of assignment (or being called away), of touching the strike, and of profit at expiration, from today's implied volatility and the days left (same <1%/>99% display and basis line as the ticket), with **"was X%"** from when you opened it (for trades placed from v1.8.0 on; touching from v1.10.0). Hover a line for what it means.
-- **Where TQQQ could be by expiration:** a small cone for this option alone: TQQQ's last month, the 68% and 95% bands out to expiration from this option's IV, and the strike as a dashed line.
+- **Where TQQQ could be by expiration:** a small cone for this option alone: TQQQ's last month, the 68% and 95% bands out to expiration from this option's IV, and the strike as a dashed line. Hovering it explains each band and the strike line for a specific date, like the Portfolio cone.
 - the market readings saved with each trade.
 
 Buttons: **Show in Portfolio** (Portfolio, with this position highlighted), **Sell more**, and **Close position…**.
