@@ -819,6 +819,14 @@ class App:
                     "kind": "exdiv", "text": f"Ex-div ${amt:.4f}".rstrip("0") if amt else "Ex-dividend",
                     "tip": f"{SYMBOL} ex-dividend date" + (f" · ${amt:.4f} per share" if amt else "")
                     + " · in-the-money covered calls are more likely to be assigned early the day before"})
+        # your notes, events and reminders (v1.12.0)
+        for n in self.db.q("SELECT * FROM notes WHERE deleted=0 AND day>=? AND day<=? ORDER BY time IS NOT NULL, time, id",
+                           (grid_start.isoformat(), grid_end.isoformat())):
+            c = days.get(n["day"])
+            if c:
+                c.setdefault("notes", []).append({"id": n["id"], "kind": n["kind"], "title": n["title"], "body": n["body"],
+                                                  "time": n["time"], "time_txt": n["time"] and _hm(n["time"]),
+                                                  "remind": n["remind"]})
         # trade days
         if r:
             for row in self.db.q("SELECT ts, kind FROM events WHERE run_id=? AND kind IN ('Trade','Shares')", (rid,)):
@@ -865,6 +873,153 @@ class App:
                 log.warning("earnings dates: %s", e)
         self._earn_thread = threading.Thread(target=run, daemon=True, name="earnings")
         self._earn_thread.start()
+
+    # ------------------------------------------------------------------ Market tab (v1.12.0)
+    MARKET_TTL = 180
+
+    def _earnings_history_refresh(self):
+        """Past earnings dates for the heavyweights (for the earnings-impact table), at most once a week."""
+        today = timeutil.today_ct()
+        last = self.db.val("SELECT value FROM meta WHERE key='earnings_hist_checked'")
+        if last and (today - dt.date.fromisoformat(last)).days < 7:
+            return
+        if getattr(self, "_earnh_thread", None) and self._earnh_thread.is_alive():
+            return
+
+        def run():
+            try:
+                got = self.provider.earnings_history(self.EARNINGS)
+                with self.db.tx():
+                    for sym, ds in got.items():
+                        for d in ds:
+                            if d < today:
+                                self.db.x("INSERT OR IGNORE INTO earnings(symbol,day) VALUES(?,?)", (sym, d.isoformat()))
+                    self.db.x("INSERT OR REPLACE INTO meta(key,value) VALUES('earnings_hist_checked',?)", (today.isoformat(),))
+            except Exception as e:  # noqa: BLE001
+                log.warning("earnings history: %s", e)
+        self._earnh_thread = threading.Thread(target=run, daemon=True, name="earnings-history")
+        self._earnh_thread.start()
+
+    def _earnings_impact(self):
+        """For each heavyweight: TQQQ's move around its last 8 reports, from the close before the report date to
+        the close the trading day after (two sessions, so it covers before-the-open and after-the-close reports)."""
+        if not (self.ind.data.get("tqqq") or {}).get("value"):
+            self.ind.warm()
+            self.ind.wait_warm(15)
+        bars = (self.ind.data.get("tqqq") or {}).get("value") or []
+        closes = {b["day"]: b["close"] for b in bars}
+        today = timeutil.today_ct()
+        out = []
+        for sym in self.EARNINGS:
+            ds = [dt.date.fromisoformat(r[0]) for r in self.db.q("SELECT day FROM earnings WHERE symbol=? ORDER BY day", (sym,))]
+            nxt = next((d for d in ds if d >= today), None)
+            moves = []
+            for d in [d for d in ds if d < today]:
+                before = closes.get(marketcal.prev_trading_day(d).isoformat())
+                after = closes.get(marketcal.next_trading_day(d).isoformat())
+                if before and after and marketcal.next_trading_day(d) < today:
+                    moves.append({"day": d.isoformat(), "label": timeutil.fmt_date(d.isoformat()), "move": round(after / before - 1, 4)})
+            moves = moves[-8:]
+            ab = [abs(m["move"]) for m in moves]
+            out.append({"symbol": sym, "next": nxt and nxt.isoformat(), "next_txt": nxt and timeutil.fmt_date(nxt.isoformat()),
+                        "days_to": nxt and (nxt - today).days, "moves": moves,
+                        "avg_abs": round(sum(ab) / len(ab), 4) if ab else None,
+                        "worst": min((m["move"] for m in moves), default=None), "best": max((m["move"] for m in moves), default=None)})
+        out.sort(key=lambda x: (x["next"] is None, x["next"] or ""))
+        return out
+
+    def api_market(self, refresh=False):
+        """The Market tab: QQQ and TQQQ today, the Nasdaq heavyweights as a heat map, what's coming up, and how
+        TQQQ has moved around each heavyweight's past earnings."""
+        self._earnings_refresh()
+        self._earnings_history_refresh()
+        syms = ("QQQ", SYMBOL) + self.EARNINGS
+        c = getattr(self, "_mkt", None)
+        err = None
+        if refresh or not c or time.time() - c["t"] > self.MARKET_TTL:
+            try:
+                snap = self.provider.market_snapshot(syms)
+                if snap:
+                    c = self._mkt = {"t": time.time(), "snap": snap, "asof": timeutil.iso()}
+            except Exception as e:  # noqa: BLE001
+                err = f"Couldn't get market quotes: {e}"
+        snap = (c or {}).get("snap") or {}
+        nexte = {r[0]: r[1] for r in self.db.q("SELECT symbol, MIN(day) FROM earnings WHERE day>=? GROUP BY symbol",
+                                               (timeutil.today_ct().isoformat(),))}
+
+        def row(s):
+            q = snap.get(s)
+            if not q:
+                return {"symbol": s, "missing": True}
+            chg = q["price"] / q["prev_close"] - 1 if q.get("prev_close") else None
+            return {"symbol": s, "price": q["price"], "prev": q.get("prev_close"), "chg": chg, "cap": q.get("market_cap"),
+                    "next_earn": nexte.get(s) and timeutil.fmt_date(nexte[s])}
+        today = timeutil.today_ct()
+        soon = []
+        for ev in events.events_between(today, today + dt.timedelta(days=7)):
+            soon.append({"day": ev["day"].isoformat(), "day_txt": timeutil.fmt_date(ev["day"].isoformat()), "text": ev["name"], "kind": ev["kind"]})
+        for s, d in sorted(nexte.items(), key=lambda x: x[1]):
+            if d <= (today + dt.timedelta(days=7)).isoformat():
+                soon.append({"day": d, "day_txt": timeutil.fmt_date(d), "text": f"{s} earnings", "kind": "earn"})
+        soon.sort(key=lambda x: x["day"])
+        return {"qqq": row("QQQ"), "tqqq": row(SYMBOL), "heavy": [row(s) for s in self.EARNINGS], "soon": soon,
+                "earnings": self._earnings_impact(), "error": err,
+                "asof": c and timeutil.fmt_ct(timeutil.parse(c["asof"]), with_date=True), "market": self._market()}
+
+    # ------------------------------------------------------------------ calendar notes (v1.12.0)
+    NOTE_REMIND = {"none": "no reminder", "morning": "reminder that morning (7:45 AM CT)",
+                   "daybefore": "reminder the afternoon before (3:30 PM CT)"}
+
+    def api_note_save(self, day, kind="note", title="", body="", time=None, remind="none", id=None):
+        try:
+            d = dt.date.fromisoformat(str(day))
+        except ValueError:
+            return {"error": "Pick a day."}
+        title, body = (title or "").strip(), (body or "").strip()
+        if kind not in ("note", "event"):
+            return {"error": "A calendar item is a note or an event."}
+        if not title:
+            return {"error": "Write something first." if kind == "note" else "Give the event a title."}
+        if len(title) > 200 or len(body) > 2000:
+            return {"error": "That's too long for a calendar item."}
+        if remind not in self.NOTE_REMIND:
+            return {"error": "Unknown reminder."}
+        tm = None
+        if kind == "event" and time:
+            try:
+                tm = dt.datetime.strptime(str(time).strip().upper().replace(" ", ""), "%I:%M%p").strftime("%H:%M")
+            except ValueError:
+                try:
+                    tm = dt.datetime.strptime(str(time).strip(), "%H:%M").strftime("%H:%M")
+                except ValueError:
+                    return {"error": "Times look like 2:30 PM or 14:30."}
+        now = timeutil.iso()
+        word = "Note" if kind == "note" else "Event"
+        when = timeutil.fmt_date(d.isoformat()) + (f", {_hm(tm)} CT" if tm else "")
+        detail = " · ".join(x for x in [body, self.NOTE_REMIND[remind] if remind != "none" else ""] if x)
+        if id:
+            old = self.db.one("SELECT * FROM notes WHERE id=? AND deleted=0", (int(id),))
+            if not old:
+                return {"error": "That calendar item is gone."}
+            self.db.x("UPDATE notes SET day=?, kind=?, title=?, body=?, time=?, remind=?, updated_at=?, "
+                      "reminded_at=CASE WHEN day=? AND remind=? THEN reminded_at ELSE NULL END WHERE id=?",
+                      (d.isoformat(), kind, title, body, tm, remind, now, d.isoformat(), remind, int(id)))
+            self.led.event("Note", f"{word} edited for {when}: {title}", detail, data={"note_id": int(id)})
+            nid = int(id)
+        else:
+            nid = self.db.x("INSERT INTO notes(day, kind, title, body, time, remind, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                            (d.isoformat(), kind, title, body, tm, remind, now, now))
+            self.led.event("Note", f"{word} added for {when}: {title}", detail, data={"note_id": nid})
+        return {"ok": True, "id": nid}
+
+    def api_note_delete(self, id):
+        n = self.db.one("SELECT * FROM notes WHERE id=? AND deleted=0", (int(id),))
+        if not n:
+            return {"error": "That calendar item is gone."}
+        self.db.x("UPDATE notes SET deleted=1, updated_at=? WHERE id=?", (timeutil.iso(), int(id)))
+        word = "Note" if n["kind"] == "note" else "Event"
+        self.led.event("Note", f"{word} deleted for {timeutil.fmt_date(n['day'])}: {n['title']}", "", data={"note_id": int(id)})
+        return {"ok": True}
 
     def _ex_dividends(self):
         """[(date, amount)] past ex-dates from Yahoo plus the next announced one; fetched once per session."""
@@ -1394,6 +1549,11 @@ class App:
             return {"ok": True}
         except Exception as e:  # noqa: BLE001
             return {"error": str(e)}
+
+
+def _hm(hhmm):
+    """'14:30' -> '2:30 PM'."""
+    return dt.datetime.strptime(hhmm, "%H:%M").strftime("%-I:%M %p") if hhmm else ""
 
 
 def _days(a, b):

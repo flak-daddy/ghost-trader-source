@@ -197,6 +197,36 @@ class YahooProvider:
                 log.warning("earnings %s: %s", sym, e)
         return out
 
+    def market_snapshot(self, symbols):
+        """{symbol: {price, prev_close, market_cap}} for the Market tab; symbols that fail are left out."""
+        out = {}
+        for sym in symbols:
+            try:
+                fi = self._t(sym).fast_info
+                p, prev = _num(fi["last_price"]), _num(fi["previous_close"])
+                cap = None
+                try:
+                    cap = _num(fi["market_cap"])
+                except Exception:  # noqa: BLE001 - ETFs have none
+                    pass
+                if p:
+                    out[sym] = {"price": p, "prev_close": prev, "market_cap": cap}
+            except Exception as e:  # noqa: BLE001
+                log.warning("snapshot %s: %s", sym, e)
+        return out
+
+    def earnings_history(self, symbols, limit=12):
+        """{symbol: [past and upcoming earnings dates]} from Yahoo's earnings history; failures left out."""
+        out = {}
+        for sym in symbols:
+            try:
+                df = self._t(sym).get_earnings_dates(limit=limit)
+                if df is not None and len(df):
+                    out[sym] = sorted({ts.date() for ts in df.index})
+            except Exception as e:  # noqa: BLE001
+                log.warning("earnings history %s: %s", sym, e)
+        return out
+
     def dividends(self):
         s = self._t().dividends
         return [(idx.date(), float(v)) for idx, v in s.items()] if s is not None else []
@@ -332,6 +362,37 @@ class DemoProvider:
             while not marketcal.is_trading_day(d):
                 d += dt.timedelta(days=1)
             out[sym] = [d]
+        return out
+
+    def market_snapshot(self, symbols):
+        self._chk("market_snapshot")
+        today, prev = timeutil.today_ct(), marketcal.prev_trading_day(timeutil.today_ct())
+        caps = {"NVDA": 4.4e12, "AAPL": 3.9e12, "MSFT": 3.7e12, "AMZN": 2.4e12, "GOOGL": 2.3e12, "META": 1.8e12,
+                "AVGO": 1.6e12, "TSLA": 1.4e12}
+        out = {}
+        for i, sym in enumerate(symbols):
+            if sym == self.symbol:
+                out[sym] = {"price": self._price_on(today), "prev_close": self._price_on(prev), "market_cap": None}
+                continue
+            base = 100 + 37 * i
+            r = random.Random(f"{sym}{today}")
+            pc = round(base * (1 + r.uniform(-.2, .2)), 2)
+            out[sym] = {"price": round(pc * (1 + r.uniform(-.035, .035)), 2), "prev_close": pc, "market_cap": caps.get(sym)}
+        return out
+
+    def earnings_history(self, symbols, limit=12):
+        self._chk("earnings_history")
+        today = timeutil.today_ct()
+        out = {}
+        for i, sym in enumerate(symbols):
+            ds, d = [], today + dt.timedelta(days=3 + i * 4)
+            for _ in range(limit):
+                x = d
+                while not marketcal.is_trading_day(x):
+                    x += dt.timedelta(days=1)
+                ds.append(x)
+                d -= dt.timedelta(days=91)
+            out[sym] = sorted(ds)
         return out
 
     def dividends(self):

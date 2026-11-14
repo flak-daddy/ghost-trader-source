@@ -68,6 +68,13 @@ CREATE TABLE iv_history(day TEXT PRIMARY KEY, iv REAL NOT NULL, price REAL, asof
 UPDATE snapshots SET account_value_c = available_c + collateral_c
   + CAST(ROUND(COALESCE(shares, 0) * COALESCE(share_price, 0) * 100) AS INTEGER);
 """,
+    # v1.12.0: your own notes, events and reminders on the calendar
+    6: """
+CREATE TABLE notes(id INTEGER PRIMARY KEY, day TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
+  body TEXT DEFAULT '', time TEXT, remind TEXT DEFAULT 'none', reminded_at TEXT, created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL, deleted INTEGER DEFAULT 0);
+CREATE INDEX notes_day ON notes(day);
+""",
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

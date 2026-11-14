@@ -449,7 +449,7 @@ The main screen. From top to bottom:
 - **Open options:** each position with contracts, the price you sold at, the current mark, collateral or shares covering, distance from the strike (and whether it's ITM or OTM), days to expiration (DTE), and P&L. Double-click a contract to open it in the Chain with its details panel. **Close** opens a buy-to-close ticket.
 - **Shares:** your lots, average cost, value and P&L, how many shares are covering calls and how many are free. **Buy shares…** opens a share ticket.
 - **Where TQQQ could go:** TQQQ's last few months, then a shaded cone from today out to your latest expiration. The darker inner band is where TQQQ would end up about 68% of the time if it moves as its implied volatility says; the lighter outer band about 95%. Each open option is drawn as its strike, from today to its expiration (puts in amber, calls in green). Hover the past for a close, the future for the cone's range on that date. The cone uses TQQQ's 30-day at-the-money IV (saved daily since v1.9.0). It says how far TQQQ might move, not which way.
-- **Calendar** (see below).
+- A link to the **calendar**, which moved to the Market tab in v1.12.0.
 
 ### Alerts
 
@@ -468,15 +468,27 @@ Ghost Trader can send desktop notifications, even when the app is closed. A smal
 |---|---|
 | Expiration day | 7:45 AM on a day your options expire: which ones, and TQQQ versus each strike. |
 | End-of-day summary | 3:30 PM: the day's change in account value, premium collected, interest earning per day, and what expires on the next trading day. Turn it on or off in Settings → Notifications. *Send now* shows today's. |
+| Calendar reminders | 7:45 AM on the day, or 3:30 PM the weekday before, for notes and events you set a reminder on (Market → calendar). |
 | Indicator alerts | When a reading you chose crosses your level, for example the 14,3,3 stochastic dropping below 20, Fear & Greed going under 25, or the VIX rising above 30. |
 
 Indicator alerts are set up in Settings → Notifications. Each rule picks a reading (any of the four stochastics, the VIX, or Fear & Greed), *below* or *above*, and a level. *Add suggested* fills in four common ones. Each row shows the reading right now, with a dot if it's already past the level.
 
 An alert fires **once per crossing**. If the stochastic drops below 20 and stays there for a week, you hear about it once. It fires again only after the reading goes back above 20 and then drops below it again. Alerts are checked whenever the indicators refresh in the app and at the two timer times, and each one is logged in History.
 
+### Market (v1.12.0)
+
+What's driving TQQQ, in one place:
+
+- **QQQ and TQQQ today**, with what 3× QQQ's move would be (TQQQ aims for 3× QQQ's daily move, and usually lands close).
+- **Coming up:** the next seven days' Fed, CPI and jobs releases and heavyweight earnings.
+- **Nasdaq heavyweights today:** NVIDIA, Apple, Microsoft, Amazon, Alphabet, Meta, Broadcom and Tesla as a heat map, each box sized by its market value and colored by today's change (green up, red down, stronger color for a bigger move). Hover a box for its price, change, size and next earnings date.
+- **Earnings and TQQQ:** for each of those companies, its next report date and TQQQ's move around its last eight reports, each measured from the close before the report date to the close the trading day after, so it catches reports before the open and after the close. The typical move is the average size of those moves, up or down, alongside the worst and best. TQQQ moves for other reasons on those days too, so read it as a rough guide.
+- **Refresh** gets new quotes (they're also refreshed every few minutes while you're on the tab).
+- The **calendar** (below).
+
 ### Calendar
 
-Below Shares, a month view of weekdays shows:
+On the Market tab, a month view of weekdays shows:
 
 - TQQQ's closing price and daily change on past days.
 - Your open expirations (highlighted) and settled ones (faded).
@@ -484,7 +496,15 @@ Below Shares, a month view of weekdays shows:
 - Interest pay dates.
 - Days you traded (double-click to see that day in History).
 - Market events: Fed (FOMC) decisions, CPI inflation reports, the monthly jobs report, and TQQQ ex-dividend dates.
+- Your own **notes, events and reminders** (see below).
 - Earnings dates for the biggest Nasdaq-100 companies: NVIDIA, Apple, Microsoft, Amazon, Alphabet, Meta, Broadcom and Tesla. Their results can move the whole index, and TQQQ three times as much, overnight. Dates come from Yahoo and are checked once a day.
+
+**Your notes, events and reminders.** Hover a day and click **+** to add:
+
+- a **note** (free text, e.g. "watch NVDA after the close"), shown with ✎, or
+- an **event** with a title and an optional time in Central (e.g. "2:30 PM Review my Dec puts").
+
+Either can have **details** and a **reminder**: *that morning* (7:45 AM CT) or *the afternoon before* (3:30 PM CT on the weekday before). Reminders are desktop notifications from the same timer as the expiration nudge, so they arrive even when Ghost Trader is closed; each fires once. Click a note or event to edit or delete it. Adding, editing and deleting are logged in **History**, and so in the History and run **CSV** exports.
 
 ### Chain
 
@@ -637,7 +657,7 @@ With only a few trades in a group, the numbers say very little.
 ### Navigating
 
 - **Double-click** any underlined item to jump to it.
-- **1–7** switch tabs (Portfolio, Chain, Indicators, History, Performance, Settings, Help).
+- **1–8** switch tabs (Portfolio, Chain, Indicators, Market, History, Performance, Settings, Help).
 - **Esc** closes a panel or ticket.
 - **Enter** confirms.
 - All times are **Central**, with Eastern in parentheses in most places.

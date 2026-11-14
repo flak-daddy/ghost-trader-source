@@ -52,7 +52,7 @@ function applyTheme() {
 matchMedia("(prefers-color-scheme: light)").addEventListener("change", applyTheme);
 
 /* ---------- header ---------- */
-const TABS = ["Portfolio", "Chain", "Indicators", "History", "Performance", "Settings", "Help"];
+const TABS = ["Portfolio", "Chain", "Indicators", "Market", "History", "Performance", "Settings", "Help"];
 function renderHeader() {
   const errs = st ? st.errors : 0;
   $("#tabs").innerHTML = TABS.map(t => `<button class="${ui.tab === t ? "on" : ""}" data-tab="${t}"${t === "History" && errs ? ` data-tip="Right-click: mark all as read"` : ""}>${t}${t === "History" && errs ? `<span class=badge>${errs}</span>` : ""}</button>`).join("");
@@ -141,7 +141,7 @@ document.addEventListener("keydown", e => {
   if ($("#splash").innerHTML) return;
   if (e.key === "Escape" && $("#ctxmenu")) { closeCtx(); return; }
   if (e.key === "Escape") { if ($("#overlay").innerHTML) closeOverlay(); else if ($("#drawer").innerHTML) { if (tk) cancelTicket(); else closeDrawer(); } else if (ui.pin != null) { ui.pin = null; render(); } else if (ui.indPin && ui.tab === "Indicators") { ui.indPin = null; render(); } else if (ui.lot) { ui.lot = null; render(); } }
-  if (/^[1-7]$/.test(e.key) && !$("#overlay").innerHTML && st.run) { ui.tab = TABS[+e.key - 1]; resetMarks(); closeDrawer(); render(); }
+  if (/^[1-8]$/.test(e.key) && !$("#overlay").innerHTML && st.run) { ui.tab = TABS[+e.key - 1]; resetMarks(); closeDrawer(); render(); }
   if (e.key === "Enter" && $("#confirmBtn") && !$("#confirmBtn").disabled) $("#confirmBtn").click();
 });
 
@@ -149,7 +149,7 @@ document.addEventListener("keydown", e => {
 async function refreshState() { const s = await api("state"); if (!s.error) st = s; return st; }
 async function render() {
   applyTheme(); renderHeader();
-  const fn = {Portfolio: renderPortfolio, Chain: renderChain, History: renderHistory, Indicators: renderIndicators, Performance: renderPerf, Settings: renderSettings, Help: renderHelp}[ui.tab];
+  const fn = {Portfolio: renderPortfolio, Chain: renderChain, History: renderHistory, Indicators: renderIndicators, Market: renderMarket, Performance: renderPerf, Settings: renderSettings, Help: renderHelp}[ui.tab];
   await fn();
   renderHeader();
 }
@@ -197,8 +197,7 @@ async function renderPortfolio() {
     <h2>Open options</h2><table><thead><tr><th class=l>Contract</th><th>Contracts</th><th>${st.positions.some(p => p.side === "long") ? "Opened at" : "Sold at"}</th><th>Mark</th><th>Collateral / cover</th><th>Distance</th><th>DTE</th><th>P&L</th><th>% of premium</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     <h2 id=sharesH style="display:flex;justify-content:space-between;align-items:center">Shares <button class="btn small" onclick="openShares('buy_shares')">Buy shares…</button></h2><table><thead><tr><th class=l>Holding</th><th>Qty</th><th>Avg cost</th><th>Price</th><th>Value</th><th>P&L</th><th>%</th><th></th></tr></thead><tbody>${shRow}</tbody></table>
     <h2>Where TQQQ could go</h2><div id=pfCone class=card style="padding:12px 14px"><span class=meta><span class=spin>${I("spin")}</span> Drawing…</span></div>
-    <div id=calendar></div>`;
-  renderCalendar();
+    <div class=meta style="margin-top:10px">The calendar is on the <span class="lnk helplink" style="margin:0" onclick="ui.tab='Market';render()">Market</span> tab.</div>`;
   api("cone", {days_back: 90}).then(d => drawCone($("#pfCone"), d, false));
 }
 async function renderCalendar() {
@@ -215,14 +214,97 @@ async function renderCalendar() {
     const evs = (d.events || []).length ? `<div class=evs>${d.events.map(e => `<span class="ev ${e.kind}" data-tip="${esc(e.tip)}">${esc(e.text)}</span>`).join("")}</div>` : "";
     const note = d.holiday ? `<div class=note>Market closed · ${esc(d.holiday)}</div>` : d.early ? `<div class=note>${esc(d.early)}</div>` : "";
     const trd = d.trades ? `<div class="trd lnk" data-go="history:day:${d.day}" data-tip="Double-click: History for this day">${I("dot")} ${plural(d.trades, "trade")}</div>` : "";
-    return `<div class="d ${d.in_month ? "" : "out"} ${d.today ? "today" : ""} ${d.holiday ? "hol" : ""}"><div class=top><span class=num>${d.n}${d.today ? ' <span class=pill style="font-size:10px">today</span>' : ""}</span>${px}</div>${note}${evs}${items}${trd}</div>`; };
+    const mine = (d.notes || []).map(n => `<div class="mynote ${n.kind}" data-note="${n.id}" data-tip="${esc((n.body ? n.body + " · " : "") + (n.remind !== "none" ? (n.remind === "morning" ? "reminder that morning" : "reminder the afternoon before") + " · " : "") + "click to edit")}">${n.kind === "note" ? "✎ " : (n.time_txt ? esc(n.time_txt) + " " : "")}${esc(n.title)}${n.remind !== "none" ? " " + I("clock") : ""}</div>`).join("");
+    return `<div class="d ${d.in_month ? "" : "out"} ${d.today ? "today" : ""} ${d.holiday ? "hol" : ""}" data-day="${d.day}"><div class=top><span class=num>${d.n}${d.today ? ' <span class=pill style="font-size:10px">today</span>' : ""}</span>${px}</div>${note}${evs}${items}${mine}${trd}<button class=addnote data-add="${d.day}" title="Add a note, event or reminder">+</button></div>`; };
   el.innerHTML = `<div class=calbar><h2>Calendar · ${esc(c.label)}</h2>
       <button class="btn small" id=calPrev title="Previous month">‹</button>${c.month !== c.this_month ? `<button class="btn small" id=calNow>This month</button>` : ""}<button class="btn small" id=calNext title="Next month">›</button></div>
     <div class=cal>${["Mon", "Tue", "Wed", "Thu", "Fri"].map(x => `<div class=hd>${x}</div>`).join("")}${c.weeks.flat().map(cell).join("")}</div>
-    <div class=meta style="margin-top:6px"><span class="it exp" style="font-size:11px;padding:0 5px;border-radius:3px;background:color-mix(in srgb,var(--warn) 22%,transparent)">$55 Put ×2</span> open expiry · <span style="opacity:.6;border:1px dashed var(--line);padding:0 5px;border-radius:3px">settled</span> resolved · <span class=ev style="font-size:11px;padding:0 5px;border-radius:3px;background:color-mix(in srgb,var(--accent) 12%,transparent)">CPI 7:30 AM</span> market event (CT; hover for details) · TQQQ close with change from the previous close · double-click anything underlined</div>${c.events_note ? `<div class=meta>${esc(c.events_note)}</div>` : ""}`;
+    <div class=meta style="margin-top:6px"><span class="it exp" style="font-size:11px;padding:0 5px;border-radius:3px;background:color-mix(in srgb,var(--warn) 22%,transparent)">$55 Put ×2</span> open expiry · <span style="opacity:.6;border:1px dashed var(--line);padding:0 5px;border-radius:3px">settled</span> resolved · <span class=ev style="font-size:11px;padding:0 5px;border-radius:3px;background:color-mix(in srgb,var(--accent) 12%,transparent)">CPI 7:30 AM</span> market event (CT; hover for details) · <span class=mynote style="font-size:11px;padding:0 5px;border-radius:3px;background:color-mix(in srgb,var(--accent) 14%,transparent)">✎ note</span> your notes and events (hover a day and click + to add; click one to edit) · TQQQ close with change from the previous close · double-click anything underlined</div>${c.events_note ? `<div class=meta>${esc(c.events_note)}</div>` : ""}`;
+  const all = c.weeks.flat();
+  $$("[data-add]").forEach(b => b.onclick = e => { e.stopPropagation(); noteEditor({day: b.dataset.add, kind: "note", remind: "none"}); });
+  $$("[data-note]").forEach(x => x.onclick = e => { e.stopPropagation(); const n = all.flatMap(d => (d.notes || []).map(m => ({...m, day: d.day}))).find(m => m.id === +x.dataset.note); if (n) noteEditor(n); });
   $("#calPrev").onclick = () => { ui.calMonth = c.prev; renderCalendar(); };
   $("#calNext").onclick = () => { ui.calMonth = c.next; renderCalendar(); };
   if ($("#calNow")) $("#calNow").onclick = () => { ui.calMonth = null; renderCalendar(); };
+}
+
+/* ---------- CALENDAR NOTES (v1.12.0) ---------- */
+function noteEditor(n) {
+  const isNew = !n.id, dayTxt = new Date(n.day + "T12:00:00").toLocaleDateString("en-US", {weekday: "long", month: "long", day: "numeric"});
+  $("#overlay").innerHTML = `<div class=scrim><div class=modal style="width:480px"><h3>${isNew ? "Add to" : "Edit"} ${esc(dayTxt)}</h3>
+    <div class=row><label>Type</label><span class=seg><button class="btn small ${n.kind === "note" ? "on" : ""}" data-nk=note>Note</button><button class="btn small ${n.kind === "event" ? "on" : ""}" data-nk=event>Event</button></span></div>
+    <div class=row><label id=ntLab>${n.kind === "note" ? "Note" : "Title"}</label><input id=ntTitle value="${esc(n.title || "")}" style="width:300px" placeholder="${n.kind === "note" ? "e.g. watch NVDA after the close" : "e.g. Review my Dec puts"}"></div>
+    <div class=row id=ntTimeRow style="${n.kind === "event" ? "" : "display:none"}"><label>Time (CT, optional)</label><input id=ntTime value="${esc(n.time_txt || "")}" style="width:110px" placeholder="2:30 PM"></div>
+    <div class=row style="align-items:flex-start"><label>Details (optional)</label><textarea id=ntBody rows=3 style="width:300px">${esc(n.body || "")}</textarea></div>
+    <div class=row><label>Reminder</label><select id=ntRem>${[["none", "None"], ["morning", "That morning (7:45 AM CT)"], ["daybefore", "The afternoon before (3:30 PM CT)"]].map(([v, t]) => `<option value="${v}" ${n.remind === v ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+    <div class=meta>Reminders are desktop notifications from Ghost Trader's timer, which also runs when the app is closed. Notes and events are logged in History and the run CSV.</div>
+    <div id=ntErr></div>
+    <div class=actions style="justify-content:space-between">${isNew ? "<span></span>" : `<button class="btn danger" id=ntDel>Delete</button>`}<span style="display:flex;gap:8px"><button class=btn onclick="closeOverlay()">Cancel</button><button class="btn primary" id=ntSave>${isNew ? "Add" : "Save"}</button></span></div></div></div>`;
+  let kind = n.kind;
+  $$("[data-nk]").forEach(b => b.onclick = () => { kind = b.dataset.nk; $$("[data-nk]").forEach(x => x.classList.toggle("on", x === b));
+    $("#ntTimeRow").style.display = kind === "event" ? "" : "none"; $("#ntLab").textContent = kind === "note" ? "Note" : "Title"; });
+  $("#ntTitle").focus();
+  $("#ntSave").onclick = async () => {
+    const r = await api("note_save", {id: n.id || null, day: n.day, kind, title: $("#ntTitle").value, body: $("#ntBody").value, time: kind === "event" ? $("#ntTime").value : null, remind: $("#ntRem").value});
+    if (r.error) { $("#ntErr").innerHTML = `<div class="alert e" style="margin-top:8px"><span class=ic>${I("warn")}</span><span>${esc(r.error)}</span></div>`; return; }
+    closeOverlay(); toast(`${I("check")} ${isNew ? "Added" : "Saved"}`, 1500); renderCalendar(); };
+  if ($("#ntDel")) $("#ntDel").onclick = async () => { const r = await api("note_delete", {id: n.id}); if (r.error) return toast(esc(r.error)); closeOverlay(); toast(`${I("check")} Deleted`, 1500); renderCalendar(); };
+}
+
+/* ---------- MARKET (v1.12.0) ---------- */
+async function renderMarket(refresh) {
+  if (!ui.mkt || refresh || Date.now() - ui.mkt._t > 180e3) {
+    if (!ui.mkt) $("#main").innerHTML = `<div class=meta style="padding:20px 0"><span class=spin>${I("spin")}</span> Getting the Nasdaq heavyweights…</div>`;
+    const m = await api("market", {refresh: !!refresh});
+    if (m.error && !m.heavy) { $("#main").innerHTML = `<div class="alert e"><span class=ic>${I("alert")}</span><span>${esc(m.error)}</span></div>`; return; }
+    ui.mkt = {...m, _t: Date.now()};
+  }
+  if (ui.tab !== "Market") return;
+  const m = ui.mkt, sg = v => v == null ? "" : `<span class="${v >= 0 ? "up" : "down"}">${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(2)}%</span>`;
+  const tile = (r, sub) => r.missing ? `<div class=card><small>${r.symbol}</small><span class=big>—</span><div class=meta>no quote</div></div>`
+    : `<div class=card><small>${r.symbol}</small><span class=big>$${f2(r.price)}</span><div class=meta>${sg(r.chg)} today${sub ? " · " + sub : ""}</div></div>`;
+  const q = m.qqq, t = m.tqqq, lev = q.chg != null && t.chg != null ? `3× QQQ would be ${sg(3 * q.chg)}` : "";
+  const soon = m.soon.length ? m.soon.map(s => `<div class=row><span class=meta>${esc(s.day_txt)}</span><span><span class="ev ${s.kind}" style="padding:1px 6px;border-radius:4px">${esc(s.text)}</span></span></div>`).join("") : `<div class=meta>Nothing scheduled in the next week.</div>`;
+  $("#main").innerHTML = `<div class=bar style="margin-bottom:10px;justify-content:flex-end"><span class=meta>${m.asof ? "quotes " + esc(m.asof) + " · Yahoo, ~15 min delayed" : ""}</span><button class="btn small" id=mktRef>${I("refresh")} Refresh</button></div>
+    ${m.error ? `<div class="alert w"><span class=ic>${I("warn")}</span><span>${esc(m.error)}. Showing the last quotes fetched.</span></div>` : ""}
+    <div class=cards style="grid-template-columns:1fr 1fr 2fr">${tile(q, "the Nasdaq-100")}${tile(t, lev)}<div class="card mktsoon"><small>Coming up · next 7 days</small>${soon}</div></div>
+    <h2>Nasdaq heavyweights today</h2><div class=card style="padding:10px"><div id=heat></div><div class=meta style="margin-top:6px">Sized by market value · color by today's change (green up, red down, stronger = bigger move) · hover for details. These eight make up a large share of the Nasdaq-100, so they drive QQQ, and TQQQ moves about 3× QQQ each day.</div></div>
+    <h2>Earnings and TQQQ</h2><div class=card style="padding:10px 12px">${earnTable(m.earnings)}</div>
+    <div id=calendar></div>`;
+  drawHeat($("#heat"), m.heavy);
+  $("#mktRef").onclick = async () => { $("#mktRef").innerHTML = `<span class=spin>${I("spin")}</span> Refreshing…`; await renderMarket(true); };
+  renderCalendar();
+}
+function earnTable(rows) {
+  const W = 180, H = 34;
+  const bars = ms => { if (!ms.length) return `<span class=meta>no history yet</span>`; const mx = Math.max(.02, ...ms.map(x => Math.abs(x.move)));
+    return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" stroke="var(--line)"/>${ms.map((x, i) => { const w = W / 8 - 4, h = Math.abs(x.move) / mx * (H / 2 - 2), xx = i * W / 8 + 2;
+      return `<rect x="${xx}" y="${x.move >= 0 ? H / 2 - h : H / 2}" width="${w}" height="${Math.max(h, 1)}" rx="1.5" fill="${x.move >= 0 ? "var(--up)" : "var(--down)"}" data-tip="${esc(x.label)} report: TQQQ ${x.move >= 0 ? "+" : "−"}${Math.abs(x.move * 100).toFixed(1)}% (close before → close the day after)"/>`; }).join("")}</svg>`; };
+  const pc = v => v == null ? "—" : `<span class="${v >= 0 ? "up" : "down"}">${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(1)}%</span>`;
+  return `<table class=mini><thead><tr><th class=l>Company</th><th class=l>Next report</th><th class=l>TQQQ around its last 8 reports</th><th>Typical move</th><th>Worst</th><th>Best</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td class=l><b>${r.symbol}</b></td><td class=l>${r.next_txt ? esc(r.next_txt) + (r.days_to != null ? ` <span class=meta>· in ${plural(r.days_to, "day")}</span>` : "") : "<span class=meta>not announced</span>"}</td><td class=l>${bars(r.moves)}</td>
+      <td data-tip="Average size of TQQQ's move, up or down, from the close before the report date to the close the day after">${r.avg_abs == null ? "—" : "±" + (r.avg_abs * 100).toFixed(1) + "%"}</td><td>${pc(r.worst)}</td><td>${pc(r.best)}</td></tr>`).join("")}</tbody></table>
+    <div class=meta style="margin-top:6px">Each bar is TQQQ's move from the close before a report date to the close the trading day after, so it covers reports before the open and after the close. Report dates from Yahoo; TQQQ moves for other reasons on those days too.</div>`;
+}
+function drawHeat(el, rows) {
+  const W = 1100, H = 220, ok = rows.filter(r => !r.missing);
+  if (!ok.length) { el.innerHTML = `<div class=meta>No quotes for the heavyweights.</div>`; return; }
+  const tot = ok.reduce((a, r) => a + (r.cap || 1), 0);
+  // slice-and-dice in two rows: biggest first, split where the running total passes about 55%
+  const sorted = ok.slice().sort((a, b) => (b.cap || 1) - (a.cap || 1)); let run = 0, cut = sorted.length;
+  sorted.forEach((r, i) => { run += r.cap || 1; if (cut === sorted.length && run / tot >= .55) cut = i + 1; });
+  const rowsOf = [sorted.slice(0, cut), sorted.slice(cut)].filter(x => x.length);
+  const rowTot = rowsOf.map(rw => rw.reduce((a, r) => a + (r.cap || 1), 0));
+  let y = 0, out = "";
+  rowsOf.forEach((rw, j) => { const h = H * rowTot[j] / tot; let x = 0;
+    rw.forEach(r => { const w = W * (r.cap || 1) / rowTot[j], k = Math.min(Math.abs(r.chg || 0) / .03, 1), col = (r.chg || 0) >= 0 ? "var(--up)" : "var(--down)";
+      out += `<g data-tip="${esc(`${r.symbol} $${f2(r.price)} · ${r.chg >= 0 ? "+" : "−"}${Math.abs(r.chg * 100).toFixed(2)}% today${r.cap ? " · market value $" + (r.cap / 1e12).toFixed(2) + "T" : ""}${r.next_earn ? " · next earnings " + r.next_earn : ""}`)}">
+        <rect x="${x + 2}" y="${y + 2}" width="${w - 4}" height="${h - 4}" rx="6" fill="${col}" fill-opacity="${(.12 + k * .5).toFixed(2)}" stroke="${col}" stroke-opacity=".5"/>
+        <text x="${x + 12}" y="${y + 26}" fill="var(--text)" font-size="17" font-weight="600">${r.symbol}</text>
+        <text x="${x + 12}" y="${y + 46}" fill="var(--text)" font-size="14">${r.chg >= 0 ? "+" : "−"}${Math.abs(r.chg * 100).toFixed(2)}%</text></g>`;
+      x += w; });
+    y += h; });
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%">${out}</svg>`;
 }
 
 /* ---------- CHAIN ---------- */
@@ -1129,7 +1211,7 @@ async function renderSettings() {
       <span class=pill style="text-align:center">Click</span><span>pin the details</span>
       <span class=pill style="text-align:center">Double-click</span><span>jump to the related place <span class=meta>(<span class=lnk>dotted underline</span>)</span></span></div></div>
     <div class=row><label>Font</label><span class=meta>Inter, bundled with the app · ${fontOk ? "loaded " + I("check") : "using backup font"}</span></div>
-    <div class=row><label>Shortcuts</label><span class=meta><span class=kbd>1</span>–<span class=kbd>7</span> tabs · <span class=kbd>Esc</span> close · <span class=kbd>Enter</span> confirm</span></div></div>
+    <div class=row><label>Shortcuts</label><span class=meta><span class=kbd>1</span>–<span class=kbd>8</span> tabs · <span class=kbd>Esc</span> close · <span class=kbd>Enter</span> confirm</span></div></div>
   <div class=card><h2 style="margin-top:0">Runs & app</h2>
     <div class=row><label>Current run</label><span>${s.run ? "Started " + esc(s.run.start) + " · " + mc(s.run.cash_c) : "none"}</span></div>
     <div class=row style="align-items:flex-start"><label>Past runs</label><span>${s.past.length ? s.past.map(r => `<div>${esc(r.start)} → ${esc(r.end)} · ${mc(r.final_c)} <button class="btn small" data-rexp="${r.id}">Save CSV…</button></div>`).join("") : `<span class=meta>none yet · closed runs' CSVs can be re-exported here</span>`}</span></div>

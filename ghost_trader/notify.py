@@ -198,13 +198,46 @@ def _once(name, today, fn):
     return text
 
 
+def note_reminders(led, now=None):
+    """Calendar reminders (v1.12.0): 'morning' items fire at the morning check on their day; 'daybefore' items at
+    the afternoon check on the weekday before. Each fires once. Returns how many were sent."""
+    now = now or timeutil.now()
+    ct = now.astimezone(timeutil.CT)
+    today = ct.date()
+    try:
+        if ct.hour < 12:
+            rows = led.db.q("SELECT * FROM notes WHERE deleted=0 AND remind='morning' AND reminded_at IS NULL AND day=?",
+                            (today.isoformat(),))
+            lead = "Today"
+        else:
+            nxt = today + dt.timedelta(days=1)
+            while nxt.weekday() >= 5:
+                nxt += dt.timedelta(days=1)
+            rows = led.db.q("SELECT * FROM notes WHERE deleted=0 AND remind='daybefore' AND reminded_at IS NULL "
+                            "AND day>? AND day<=?", (today.isoformat(), nxt.isoformat()))
+            lead = "Tomorrow" if nxt == today + dt.timedelta(days=1) else nxt.strftime("%A")
+    except Exception as e:  # noqa: BLE001 - an older ledger without the notes table
+        log.warning("reminders: %s", e)
+        return 0
+    sent = 0
+    for n in rows:
+        when = lead + (f" {dt.datetime.strptime(n['time'], '%H:%M').strftime('%-I:%M %p')} CT" if n["time"] else "")
+        ok, _ = send(f"Ghost Trader · {'reminder' if n['kind'] == 'note' else 'event'}",
+                     f"{when}: {n['title']}" + (f"\n{n['body']}" if n["body"] else ""))
+        if ok:
+            led.db.x("UPDATE notes SET reminded_at=? WHERE id=?", (timeutil.iso(now), n["id"]))
+            sent += 1
+    return sent
+
+
 def daily_check(led, quote_price=None, now=None, settings=None, readings=None, rate=None):
     """Called by the timer. Mornings: expiration nudge. From 3 PM CT: end-of-day summary (if on).
     Both times: indicator alerts (if a readings function is given). Returns what it did, for logging."""
     now = now or timeutil.now()
     today = now.astimezone(timeutil.CT).date()
+    nr = note_reminders(led, now)
     if not marketcal.is_trading_day(today):
-        return "not a trading day"
+        return "not a trading day" + (f" · {nr} reminder(s)" if nr else "")
     settings = settings or config.Settings()
     out = []
     if readings is not None:

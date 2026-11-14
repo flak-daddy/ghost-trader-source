@@ -155,6 +155,7 @@ def test_migration_restates_old_snapshots(home, tmp_path):
     c = sqlite3.connect(f)
     c.execute("UPDATE snapshots SET accrued=7.5, account_value_c=account_value_c+750")
     c.execute("UPDATE meta SET value='4' WHERE key='schema_version'")
+    c.execute("DROP TABLE IF EXISTS notes")          # added after schema 4 (v1.12.0)
     c.commit()
     c.close()
     d = dbm.DB(f)

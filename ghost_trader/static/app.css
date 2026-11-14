@@ -169,3 +169,8 @@ input.bad{border-color:var(--down)}
 .volcharts{display:grid;grid-template-columns:1fr 1fr;gap:16px;border-top:1px solid var(--line);margin-top:6px;padding-top:8px}
 .volcharts circle[data-tip]{cursor:default}
 .itrades{border-top:1px solid var(--line);margin-top:4px;padding-top:4px;font-size:12px}
+.cal .d{position:relative}.cal .addnote{position:absolute;right:6px;bottom:5px;width:20px;height:20px;border-radius:50%;border:1px solid var(--line);background:var(--panel2);color:var(--dim);font-size:14px;line-height:16px;padding:0;cursor:pointer;opacity:0;transition:opacity .15s}
+.cal .d:hover .addnote{opacity:1}.cal .addnote:hover{color:var(--accent);border-color:var(--accent)}
+.cal .mynote{font-size:12px;padding:1px 6px;border-radius:4px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.cal .mynote.event{background:color-mix(in srgb,var(--accent) 30%,transparent);font-weight:600}
+.mktsoon .ev{font-size:12px;color:var(--text);background:color-mix(in srgb,var(--accent) 12%,transparent)}.mktsoon .ev.earn{background:color-mix(in srgb,var(--s3) 16%,transparent)}.cal .mynote svg{width:11px;height:11px;vertical-align:-1px}
