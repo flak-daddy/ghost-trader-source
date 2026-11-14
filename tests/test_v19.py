@@ -94,8 +94,8 @@ def test_restore_apply_swaps_ledger_and_logs_it(home):
     a = ready(home)
     name = a.api_backup_now()["name"]
     c = a.api_chain()
-    a.api_place({"action": "sell_to_open", "type": "put", "expiry": c["expiry"], "strike": float(round(c["price"]) - 4),
-                 "qty": 1, "price": None})
+    o = {"action": "sell_to_open", "type": "put", "expiry": c["expiry"], "strike": float(round(c["price"]) - 4), "qty": 1}
+    assert a.api_place({**o, "price": a.api_ticket(o)["default_fill"]}).get("position_id")
     restarted = []
     a.on_restart = lambda: restarted.append(1)
     r = a.api_restore_apply(source=name)

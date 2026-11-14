@@ -296,11 +296,30 @@ class App:
 
         def above(x):  # P(S_T > x)
             return ncdf((math.log(S / x) + (r - iv * iv / 2) * T) / sd) if x > 0 else 1.0
+        info["touch"] = App._touch(type_, S, K, T, r, iv)
         if type_ == "put":
             be = K - px
             return {"profit": above(be), "worthless": above(K), "breakeven": round(be, 2), **info}
         be = K + px
         return {"profit": 1 - above(be), "worthless": 1 - above(K), "breakeven": round(be, 2), **info}
+
+    @staticmethod
+    def _touch(type_, S, K, T, r, iv):
+        """Chance TQQQ trades at the strike, from the side it's on now toward the money (down to a put's strike, up
+        to a call's), at some point before expiration (lognormal, risk-neutral, reflection principle). 1 when it's
+        already through the strike."""
+        if not (S and K and T > 0 and iv > 0):
+            return None
+        if (type_ == "put" and S <= K) or (type_ == "call" and S >= K):
+            return 1.0
+        mu, sd = r - iv * iv / 2, iv * math.sqrt(T)
+        h = math.log(K / S)
+        e = math.exp(max(min(2 * mu * h / (iv * iv), 50), -50))
+        if h < 0:   # strike below: chance the low touches it
+            p = ncdf((h - mu * T) / sd) + e * ncdf((h + mu * T) / sd)
+        else:       # strike above: chance the high touches it
+            p = ncdf((-h + mu * T) / sd) + e * ncdf((-h - mu * T) / sd)
+        return max(0.0, min(1.0, p))
 
     def api_ticket(self, order, fresh=False):
         """Quote + rule check + effects + compare tables for the ticket side panel."""
@@ -341,6 +360,9 @@ class App:
             ret = (prem + intr) / base if base else 0
             out.update(interest_c=cents(intr), ret=ret, ann=ret * 365 / max(dte, 1))
             out["chances"] = self._chances(o["type"], S, k, px, dte, (q or {}).get("iv"), rate, (q or {}).get("iv_src"))
+            if q and q.get("iv") and S and px:
+                out["payoff"] = {"type": o["type"], "strike": k, "premium": px, "qty": qty, "S": S, "iv": q["iv"],
+                                 "dte": dte, "rate": rate / 100, "covered": o["type"] == "call"}
         # strikes available (with a bid) for this expiry/type, and the expiration list
         try:
             c = self.quotes.chain(o["expiry"])
@@ -1008,6 +1030,53 @@ class App:
         if not r or not r["csv_text"]:
             return {"error": "No CSV saved for that run."}
         return self._save_text(r["csv_name"], r["csv_text"])
+
+    # ------------------------------------------------------------------ probability cones (v1.10.0)
+    def api_cone(self, id=None, days_back=60):
+        """What the cone charts need: recent TQQQ closes, today's price, the IV the cone uses, and the open options
+        to draw against it (one position for the panel's mini cone, all of them for Portfolio)."""
+        S = self.price()
+        if not S:
+            return {"error": "No TQQQ price yet."}
+        today = timeutil.today_ct()
+        since = (today - dt.timedelta(days=int(days_back))).isoformat()
+        bars = (self.ind.data.get("tqqq") or {}).get("value") or []
+        closes = [(b["day"], b["close"]) for b in sorted(bars, key=lambda b: b["day"]) if b["day"] >= since]
+        if len(closes) < 5:
+            closes = [(r[0], r[1]) for r in self.db.q("SELECT day, close FROM prices WHERE symbol=? AND day>=? ORDER BY day",
+                                                     (SYMBOL, since))]
+        if closes and closes[-1][0] == today.isoformat():
+            closes[-1] = (closes[-1][0], S)
+        else:
+            closes.append((today.isoformat(), S))
+        ps = self.led.positions()
+        if id is not None:
+            ps = [p for p in ps if p["id"] == int(id)]
+        pos, ivs = [], []
+        for p in ps:
+            q = None
+            try:
+                q = self.quotes.quote(p["expiry"], p["type"], p["strike"], fresh=False)
+            except Exception:  # noqa: BLE001
+                pass
+            iv = (q or {}).get("iv")
+            if iv:
+                ivs.append(iv)
+            pos.append({"id": p["id"], "type": p["type"], "side": p["side"], "strike": p["strike"], "expiry": p["expiry"],
+                        "qty": p["open_qty"], "label": f"{timeutil.fmt_exp(dt.date.fromisoformat(p['expiry']))} {strike_txt(p['strike'])} {p['type'].title()}",
+                        "dte": (dt.date.fromisoformat(p["expiry"]) - today).days, "iv": iv})
+        hist = ivhist.history(self.db, (today - dt.timedelta(days=10)).isoformat())
+        if id is not None and ivs:
+            iv, src = ivs[0], "this option's IV"
+        elif hist:
+            iv, src = hist[-1][1], "TQQQ's 30-day at-the-money IV"
+        elif ivs:
+            iv, src = sum(ivs) / len(ivs), "the average IV of your open options"
+        else:
+            iv, src = 0.6, "a typical IV for TQQQ (no quote yet)"
+        horizon = max([p["dte"] for p in pos] + [30 if id is None else 1])
+        return {"today": today.isoformat(), "price": S, "closes": closes, "iv": iv, "iv_src": src,
+                "rate": (self.rates.for_day(today) or 0) / 100, "horizon": horizon, "positions": pos}
 
     # ------------------------------------------------------------------ backup & restore (v1.9.0)
     BACKUP_LABELS = {"startup": "at startup", "pre-update": "before an update", "manual": "by you",

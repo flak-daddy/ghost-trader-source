@@ -429,6 +429,7 @@ The main screen. From top to bottom:
 - **Cards:** account value and return, Available, Collateral, Shares, premium collected this run, and interest earned (with the next pay date).
 - **Open options:** each position with contracts, the price you sold at, the current mark, collateral or shares covering, distance from the strike (and whether it's ITM or OTM), days to expiration (DTE), and P&L. Double-click a contract to open it in the Chain with its details panel. **Close** opens a buy-to-close ticket.
 - **Shares:** your lots, average cost, value and P&L, how many shares are covering calls and how many are free. **Buy shares…** opens a share ticket.
+- **Where TQQQ could go:** TQQQ's last few months, then a shaded cone from today out to your latest expiration. The darker inner band is where TQQQ would end up about 68% of the time if it moves as its implied volatility says; the lighter outer band about 95%. Each open option is drawn as its strike, from today to its expiration (puts in amber, calls in green). Hover the past for a close, the future for the cone's range on that date. The cone uses TQQQ's 30-day at-the-money IV (saved daily since v1.9.0). It says how far TQQQ might move, not which way.
 - **Calendar** (see below).
 
 ### Alerts
@@ -488,6 +489,10 @@ The ticket opens on the right. It shows:
 - **What happens:** premium in, collateral set aside (or shares locked), interest on the collateral to expiration, the return if it expires worthless, and your Available cash before and after.
 - **Chances** (when selling to open): three lines, each with a plain percentage. **Chance of expiring worthless** (TQQQ finishes on the keep-the-premium side of the strike), **chance of assignment** (or **of being called away** for a covered call; always 100% minus the first line), and **chance of profit at expiration** (TQQQ finishes on the profitable side of your breakeven, which for a put is the strike minus the premium, so profit can include being assigned). Hover any line for exactly what it means for that contract. These are estimates from the option's implied volatility, the same math that prices the option, not predictions. They assume the market's expected volatility is right and say nothing about direction. A line under them shows what they're based on: the IV, TQQQ's price, and the calendar days left.
 
+  **Chance of touching** the strike (v1.10.0): the chance TQQQ trades at the strike at some point before expiration (down to a put's strike, up to a call's), even if it finishes on the safe side. It's always at least the chance of finishing through the strike, often about double. Touching isn't assignment (that depends on the close), but it's the moment the position looks worst. When TQQQ is already through the strike it reads **already there**.
+
+  **Payoff** (sell-to-open tickets): the trade's profit or loss across TQQQ prices, at expiration (solid), halfway there (dotted) and today (dashed), with the breakeven, TQQQ now and the most you can make marked. Hover for the values at any price. For a covered call it shows your shares (valued from today's price) plus the call, which is the position you actually hold.
+
   Very unlikely or very likely outcomes show as **<1%** or **>99%**, never a flat 0% or 100%: a far out-of-the-money put with a week left really can be a fraction of a percent from assignment, but it's never impossible.
 
   Yahoo sometimes reports a junk implied volatility, especially for far out-of-the-money or quiet contracts (near zero after hours, or thousands of percent). Anything under 5% or over 500% is treated as junk: Ghost Trader works the IV out from the option's own mid price instead and marks it **(from price)**. If the price can't explain it either, it borrows the nearest strike's IV and marks it **(nearest strike)**. The same repaired IV is used for the quote line's IV and the chain's delta.
@@ -533,7 +538,8 @@ Double-click a position on Portfolio, or its gold dot in the Chain, to open its 
 - how far TQQQ is from the strike and the days left,
 - what happens if it expires worthless, and what happens if it's assigned or called away,
 - your note and tags,
-- **Chances now:** chance of expiring worthless, of assignment (or being called away), and of profit at expiration, from today's implied volatility and the days left (same <1%/>99% display and basis line as the ticket), with **"was X%"** from when you opened it (for trades placed from v1.8.0 on). Hover a line for what it means.
+- **Chances now:** chance of expiring worthless, of assignment (or being called away), of touching the strike, and of profit at expiration, from today's implied volatility and the days left (same <1%/>99% display and basis line as the ticket), with **"was X%"** from when you opened it (for trades placed from v1.8.0 on; touching from v1.10.0). Hover a line for what it means.
+- **Where TQQQ could be by expiration:** a small cone for this option alone: TQQQ's last month, the 68% and 95% bands out to expiration from this option's IV, and the strike as a dashed line.
 - the market readings saved with each trade.
 
 Buttons: **Show in Portfolio** (Portfolio, with this position highlighted), **Sell more**, and **Close position…**.

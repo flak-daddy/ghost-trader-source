@@ -196,8 +196,10 @@ async function renderPortfolio() {
     <div class=meta>Account value = cash + collateral + shares · interest counts once it's paid on the 15th · option buy-back prices not counted</div>
     <h2>Open options</h2><table><thead><tr><th class=l>Contract</th><th>Contracts</th><th>${st.positions.some(p => p.side === "long") ? "Opened at" : "Sold at"}</th><th>Mark</th><th>Collateral / cover</th><th>Distance</th><th>DTE</th><th>P&L</th><th>% of premium</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     <h2 id=sharesH style="display:flex;justify-content:space-between;align-items:center">Shares <button class="btn small" onclick="openShares('buy_shares')">Buy shares…</button></h2><table><thead><tr><th class=l>Holding</th><th>Qty</th><th>Avg cost</th><th>Price</th><th>Value</th><th>P&L</th><th>%</th><th></th></tr></thead><tbody>${shRow}</tbody></table>
+    <h2>Where TQQQ could go</h2><div id=pfCone class=card style="padding:12px 14px"><span class=meta><span class=spin>${I("spin")}</span> Drawing…</span></div>
     <div id=calendar></div>`;
   renderCalendar();
+  api("cone", {days_back: 90}).then(d => drawCone($("#pfCone"), d, false));
 }
 async function renderCalendar() {
   const c = await api("calendar", {month: ui.calMonth});
@@ -324,10 +326,10 @@ function renderTicket() {
   if (tk.action === "sell_to_open" && tk.type === "put") effects = `<div class=row><label>Premium → Available now</label><span class=up>${mc(ef.premium_c || 0, true)}</span></div>
       <div class=row><label>Collateral set aside</label><span>${mc(ef.collateral_c || 0)}</span></div>
       <div class=row><label>Interest on collateral to expiry @ ${f2(d.rate)}%</label><span class=up>${mc(d.interest_c || 0, true)}</span></div>
-      <div class=row data-tip="${pct(d.ret, 2)} over ${plural(d.dte, "day")} (premium + interest on the collateral, against the collateral) ≈ ${pct(d.ann)} a year if repeated back-to-back for a year. A comparison yardstick, not a forecast."><label>Return if it expires worthless</label><span><b>${pct(d.ret, 2)}</b></span></div>${chancesRows(d.chances, tk.type)}`;
+      <div class=row data-tip="${pct(d.ret, 2)} over ${plural(d.dte, "day")} (premium + interest on the collateral, against the collateral) ≈ ${pct(d.ann)} a year if repeated back-to-back for a year. A comparison yardstick, not a forecast."><label>Return if it expires worthless</label><span><b>${pct(d.ret, 2)}</b></span></div>${chancesRows(d.chances, tk.type)}<div id=tkPayoff></div>`;
   else if (tk.action === "sell_to_open") effects = `<div class=row><label>Premium → Available now</label><span class=up>${mc(ef.premium_c || 0, true)}</span></div>
       <div class=row><label>Shares locked as cover</label><span>${(tk.qty || 0) * 100}</span></div>
-      <div class=row data-tip="${pct(d.ret, 2)} over ${plural(d.dte, "day")} (premium against the value of the 100 shares per contract covering it) ≈ ${pct(d.ann)} a year if repeated back-to-back for a year. A comparison yardstick, not a forecast."><label>Return if it expires worthless</label><span><b>${pct(d.ret, 2)}</b></span></div>${chancesRows(d.chances, tk.type)}`;
+      <div class=row data-tip="${pct(d.ret, 2)} over ${plural(d.dte, "day")} (premium against the value of the 100 shares per contract covering it) ≈ ${pct(d.ann)} a year if repeated back-to-back for a year. A comparison yardstick, not a forecast."><label>Return if it expires worthless</label><span><b>${pct(d.ret, 2)}</b></span></div>${chancesRows(d.chances, tk.type)}<div id=tkPayoff></div>`;
   else if (tk.action === "buy_to_close") effects = `<div class=row><label>Cost out${tk.type === "put" ? " (from this position's collateral)" : ""}</label><span class=down>${mc(-(ef.cost_c || 0))}</span></div>
       ${tk.type === "put" ? `<div class=row><label>Collateral released</label><span>${mc((ef.collateral_released_c || 0) - (ef.cost_c || 0))}</span></div>` : `<div class=row><label>Shares unlocked</label><span>${(tk.qty || 0) * 100}</span></div>`}
       ${ef.result_c != null ? `<div class=row><label>Result on these contracts</label><span class="${ef.result_c >= 0 ? "up" : "down"}">${mc(ef.result_c, true)}</span></div>` : ""}`;
@@ -367,9 +369,11 @@ function renderTicket() {
   const n = $("#tkNote"); if (n) n.oninput = () => tk.note = n.value;
   const tg = $("#tkTag"); if (tg) tg.onkeydown = e => { if (e.key === "Enter" && tg.value.trim()) { let v = tg.value.trim().toLowerCase().replace(/\s+/g, "-"); if (!v.startsWith("#")) v = "#" + v; if (!tk.tags.includes(v)) tk.tags.push(v); renderTicket(); setTimeout(() => $("#tkTag") && $("#tkTag").focus(), 0); } };
   $("#reviewBtn").onclick = showConfirm;
+  if (tk.action === "sell_to_open") drawPayoff($("#tkPayoff"), d.payoff);
 }
 
 /* Chances as text: never a flat 0% or 100%, which reads as "certain" when it's only very unlikely / very likely. */
+const touchTxt = (c, type, K) => c.touch >= 1 && (type === "put" ? c.S <= K : c.S >= K) ? "already there" : chPct(c.touch);
 function chPct(v) { return v == null ? "—" : v >= 0.995 ? ">99%" : v < 0.005 ? "<1%" : (v * 100).toFixed(0) + "%"; }
 const IV_SRC = {quote: "from Yahoo's quote", price: "worked out from the option's price (Yahoo's reading was implausible)",
   nearby: "borrowed from the nearest strike (this contract's reading was implausible)"};
@@ -388,14 +392,16 @@ function chancesRows(c, type) {
   const rows = type === "put" ? [
     ["Chance of expiring worthless", c.worthless, `% chance TQQQ closes above ${k} at expiration: the put expires and you keep the whole premium`],
     ["Chance of assignment", 1 - c.worthless, `% chance TQQQ closes below ${k} and you buy 100 shares per contract at ${k}`],
+    [`Chance of touching ${k}`, c.touch, `% chance TQQQ trades at or below ${k} at some point before expiration, even if it finishes above. Touching isn't assignment (that depends on the close), but it's when the position looks worst`],
     ["Chance of profit at expiration", c.profit, `% chance TQQQ closes above ${be}, the breakeven (${k} strike − premium): either expiring worthless, or assigned with the drop smaller than the premium`],
   ] : [
     ["Chance of expiring worthless", c.worthless, `% chance TQQQ closes below ${k} at expiration: the call expires, your shares stay, you keep the whole premium`],
     ["Chance of being called away", 1 - c.worthless, `% chance TQQQ closes above ${k} and your 100 shares per contract are sold at ${k}`],
+    [`Chance of touching ${k}`, c.touch, `% chance TQQQ trades at or above ${k} at some point before expiration, even if it finishes below. Touching isn't being called away (that depends on the close), but it's when your shares look most likely to go`],
     ["Chance of profit at expiration", c.profit, `% chance TQQQ closes below ${be} (${k} strike + premium), where the premium outweighs what selling at ${k} gives up`],
   ];
   return `<div class=chances>
-    ${rows.map(([lab, v, tip]) => `<div class=row data-tip="${esc(tip)}"><label>${lab}</label><span>${pc(v)}</span></div>`).join("")}
+    ${rows.filter(r => r[1] != null).map(([lab, v, tip]) => `<div class=row data-tip="${esc(tip)}"><label>${lab}</label><span>${/touching/.test(lab) ? `<b>${touchTxt(c, type, +tk.strike)}</b>` : pc(v)}</span></div>`).join("")}
     ${chBasis(c)}</div>`;
 }
 function helpFor(t) {
@@ -620,10 +626,12 @@ async function openPosPanel(id) {
     ${p.note ? `<div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:var(--panel2);font-size:13px"><span class=meta>Your note</span><br><i>“${esc(p.note)}”</i></div>` : ""}
     ${short && p.type === "put" && p.dist < 0.03 ? `<div class="alert w" style="margin-top:10px"><span class=ic>${I("warn")}</span><span>${p.dist < 0 ? "In the money." : "Within 3% of the strike."}</span></div>` : ""}
     ${short ? posChances(p) : ""}
+    <div id=posCone></div>
     ${readingsTable(p.readings)}
     <div class=actions style="justify-content:space-between"><button class=btn onclick="closeDrawer();go('pos:${p.id}')" data-tip="Portfolio, with this position highlighted">Show in Portfolio</button>
       <span style="display:flex;gap:8px">${short ? `<button class=btn onclick="openTicket({expiry:'${p.expiry}',strike:${p.strike},type:'${p.type}',action:'sell_to_open',from:${p.id}})">Sell more</button>` : ""}
       <button class="btn primary" onclick="openTicket({close:${p.id},from:${p.id}})">Close position…</button></span></div></div>`;
+  api("cone", {id: p.id, days_back: 30}).then(d => { if ($("#posCone") && !tk) drawCone($("#posCone"), d, true); });
 }
 
 function storyPanel(p) {
@@ -661,14 +669,16 @@ function posChances(p) {
   const rows = p.type === "put" ? [
     ["Chance of expiring worthless", c.worthless, o && o.worthless, `% chance TQQQ closes above ${k} at expiration: the put expires and you keep the whole premium`],
     ["Chance of assignment", 1 - c.worthless, o && 1 - o.worthless, `% chance TQQQ closes below ${k} and you buy 100 shares per contract at ${k}`],
+    [`Chance of touching ${k}`, c.touch, o && o.touch, `% chance TQQQ trades at or below ${k} at some point before expiration, even if it finishes above. Touching isn't assignment (that depends on the close), but it's when the position looks worst`],
     ["Chance of profit at expiration", c.profit, o && o.profit, `% chance TQQQ closes above ${be}, the breakeven (${k} strike − premium): either expiring worthless, or assigned with the drop smaller than the premium`],
   ] : [
     ["Chance of expiring worthless", c.worthless, o && o.worthless, `% chance TQQQ closes below ${k} at expiration: the call expires, your shares stay, you keep the whole premium`],
     ["Chance of being called away", 1 - c.worthless, o && 1 - o.worthless, `% chance TQQQ closes above ${k} and your 100 shares per contract are sold at ${k}`],
+    [`Chance of touching ${k}`, c.touch, o && o.touch, `% chance TQQQ trades at or above ${k} at some point before expiration, even if it finishes below. Touching isn't being called away (that depends on the close), but it's when your shares look most likely to go`],
     ["Chance of profit at expiration", c.profit, o && o.profit, `% chance TQQQ closes below ${be} (${k} strike + premium), where the premium outweighs what selling at ${k} gives up`],
   ];
   return `<div class=meta style="margin:14px 0 4px">CHANCES NOW${o ? ` <span style="opacity:.8">· and when you opened it</span>` : ""}</div>
-    <table class=mini><tbody>${rows.map(([lab, v, w, tip]) => `<tr data-tip="${esc(tip)}"><td class=l>${lab}</td><td><b>${chPct(v)}</b>${o ? was(w) : ""}</td></tr>`).join("")}</tbody></table>
+    <table class=mini><tbody>${rows.filter(r => r[1] != null).map(([lab, v, w, tip]) => `<tr data-tip="${esc(tip)}"><td class=l>${lab}</td><td><b>${/touching/.test(lab) ? touchTxt(c, p.type, p.strike) : chPct(v)}</b>${o ? was(w) : ""}</td></tr>`).join("")}</tbody></table>
     ${chBasis(c)}`;
 }
 function readingsLine(r, day) {
@@ -681,6 +691,110 @@ function readingsTable(list) {
   const rows = list.map(r => `<tr class=lnk data-go="ind:${r.day}" data-tip="Double-click: Indicators on this date"><td class=l>${esc(r.label)}<div class=meta>${esc(r.when)}</div></td><td>${r0(r.stoch14_k)}/${r0(r.stoch14_d)}</td><td>${r0(r.stoch30_k)}</td><td>${r0(r.stoch60_k)}</td><td>${r0(r.stoch180_k)}</td><td>${r.vix == null ? "—" : f2(r.vix)}</td><td>${r0(r.fg)}<div class=meta>${esc(r.fg_rating || "")}</div></td></tr>`).join("");
   return `<div class=meta style="margin:14px 0 4px">MARKET AT EACH TRADE <span class="lnk helplink" onclick="go('ind')" style="margin-left:6px">Indicators ↗</span></div>
     <table class="mini rdt"><thead><tr><th class=l></th><th>Stoch 14,3,3</th><th>30</th><th>60</th><th>180</th><th>VIX</th><th>F&amp;G</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+/* ---------- PAYOFF CHART + PROBABILITY CONES (v1.10.0) ---------- */
+const jsN = x => { const t = 1 / (1 + 0.2316419 * Math.abs(x)), d = 0.3989423 * Math.exp(-x * x / 2),
+  p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274)))); return x > 0 ? 1 - p : p; };
+function bsVal(type, S, K, T, r, v) {
+  if (T <= 0 || v <= 0) return Math.max(0, type === "call" ? S - K : K - S);
+  const d1 = (Math.log(S / K) + (r + v * v / 2) * T) / (v * Math.sqrt(T)), d2 = d1 - v * Math.sqrt(T);
+  return type === "call" ? S * jsN(d1) - K * Math.exp(-r * T) * jsN(d2) : K * Math.exp(-r * T) * jsN(-d2) - S * jsN(-d1);
+}
+const usd0 = v => (v < 0 ? "−" : v > 0 ? "+" : "") + "$" + Math.abs(Math.round(v)).toLocaleString("en-US");
+
+/* P&L at expiration, halfway and today across a range of TQQQ prices. Covered calls include the covering shares,
+   valued from today's price, so the curve is the position you actually hold. */
+function drawPayoff(el, pf) {
+  if (!el || !pf) return;
+  const {type, strike: K, premium: P, qty, S: S0, iv, dte, rate: r} = pf, m = 100 * (qty || 1), T = Math.max(dte, 0.5) / 365;
+  const sd = iv * Math.sqrt(T), lo = Math.max(0.01, Math.min(S0 * Math.exp(-2.4 * sd), K * 0.92)), hi = Math.max(S0 * Math.exp(1.4 * sd), K * 1.08);
+  const opt = (s, t) => bsVal(type, s, K, t, r, iv);
+  const pnl = (s, t) => (P - opt(s, t)) * m + (pf.covered ? (s - S0) * m : 0);
+  const N = 120, xs = Array.from({length: N + 1}, (_, i) => lo + (hi - lo) * i / N);
+  const cur = [[0, "exp", "at expiration"], [T / 2, "mid", `in ${plural(Math.round(dte / 2), "day")}`], [T, "now", "today"]]
+    .map(([t, k, l]) => ({k, l, y: xs.map(s => pnl(s, t))}));
+  const all = cur.flatMap(c => c.y), y0 = Math.min(...all), y1 = Math.max(...all), pad = (y1 - y0) * 0.08 || 50;
+  const W = 420, H = 210, L = 52, R = 10, Tp = 16, B = 26;
+  const X = s => L + (s - lo) / (hi - lo) * (W - L - R), Y = v => Tp + (y1 + pad - v) / (y1 - y0 + 2 * pad) * (H - Tp - B);
+  const be = pf.covered ? S0 - P : type === "put" ? K - P : K + P, maxP = pf.covered ? (K - S0 + P) * m : P * m;
+  const path = ys => "M" + ys.map((v, i) => `${X(xs[i]).toFixed(1)},${Y(v).toFixed(1)}`).join("L");
+  const ticks = niceTicks(y0 - pad, y1 + pad, 4).filter(v => Y(v) > Tp - 2 && Y(v) < H - B + 2);
+  const xt = niceTicks(lo, hi, 5).filter(v => v >= lo && v <= hi);
+  const vline = (x, c, lab, yy, anchor = "start") => `<line x1=${X(x)} x2=${X(x)} y1=${Tp} y2=${H - B} stroke="${c}" stroke-width=1 stroke-dasharray="3 3"/>` +
+    `<text x=${X(x) + (anchor === "end" ? -4 : 4)} y=${yy} fill="${c}" font-size=10.5 text-anchor=${anchor}>${lab}</text>`;
+  const svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" class=pfsvg>
+    ${ticks.map(v => `<line x1=${L} x2=${W - R} y1=${Y(v)} y2=${Y(v)} stroke="var(--line)" stroke-width="${v === 0 ? 1.2 : 0.6}"/><text x=${L - 6} y=${Y(v) + 3.5} fill="var(--dim)" font-size=10 text-anchor=end>${usd0(v)}</text>`).join("")}
+    ${xt.map(v => `<text x=${X(v)} y=${H - 8} fill="var(--dim)" font-size=10 text-anchor=middle>$${v}</text>`).join("")}
+    <path d="${path(cur[2].y)}" fill=none stroke="var(--dim)" stroke-width=1.3 stroke-dasharray="4 3"/>
+    <path d="${path(cur[1].y)}" fill=none stroke="var(--accent)" stroke-width=1.3 stroke-dasharray="1.5 2.5"/>
+    <path d="${path(cur[0].y)}" fill=none stroke="var(--up)" stroke-width="2"/>
+    ${vline(be, "var(--warn)", `breakeven $${f2(be)}`, Tp + 10, be > S0 ? "start" : "end")}
+    ${vline(S0, "var(--text)", `TQQQ $${f2(S0)}`, Tp + 24, S0 >= be ? "start" : "end")}
+    ${Math.abs(X(K) - X(S0)) > 4 ? `<line x1=${X(K)} x2=${X(K)} y1=${Tp} y2=${H - B} stroke="var(--dim)" stroke-width=".7"/>` : ""}
+    <text x=${W - R} y=${Y(maxP) - 5} fill="var(--up)" font-size=10.5 text-anchor=end>max ${usd0(maxP)}</text>
+    <line class=pfx x1=0 x2=0 y1=${Tp} y2=${H - B} stroke="var(--dim)" style="display:none"/></svg>`;
+  el.innerHTML = `<div class=meta style="margin:12px 0 4px">PAYOFF${pf.covered ? ` <span style="opacity:.8">· your shares (from today's $${f2(S0)}) + this call</span>` : ""}</div>${svg}
+    <div class=pfread>${pfLegend()}</div>`;
+  const s = el.querySelector("svg"), read = el.querySelector(".pfread"), xh = el.querySelector(".pfx");
+  s.addEventListener("mousemove", e => { const b = s.getBoundingClientRect(), px = (e.clientX - b.left) * W / b.width;
+    if (px < L || px > W - R) return; const sx = lo + (px - L) / (W - L - R) * (hi - lo);
+    xh.setAttribute("x1", px); xh.setAttribute("x2", px); xh.style.display = "";
+    read.innerHTML = `TQQQ at <b>$${f2(sx)}</b> · at expiration <b class="${pnl(sx, 0) >= 0 ? "up" : "down"}">${usd0(pnl(sx, 0))}</b> · today <b class="${pnl(sx, T) >= 0 ? "up" : "down"}">${usd0(pnl(sx, T))}</b>`; });
+  s.addEventListener("mouseleave", () => { xh.style.display = "none"; read.innerHTML = pfLegend(); });
+  function pfLegend() { return `<span class=up>━</span> at expiration · <span style="color:var(--accent)">┈</span> in ${plural(Math.round(dte / 2), "day")} · <span style="color:var(--dim)">╌</span> today · hover for values · IV ${(iv * 100).toFixed(0)}%`; }
+}
+
+/* A cone of where TQQQ could be, from today out to the latest expiration: the inner band holds about 68% of the
+   outcomes its IV implies, the outer about 95%. Open options are drawn as their strike, from today to expiry. */
+function drawCone(el, d, mini) {
+  if (!el || !d || d.error) { if (el) el.innerHTML = ""; return; }
+  const day = s => new Date(s + "T12:00:00").getTime() / 864e5, t0 = day(d.today);
+  const hist = d.closes.map(([dd, c]) => [day(dd), c]);
+  const end = t0 + Math.max(d.horizon, mini ? 2 : 7), x0 = hist.length ? hist[0][0] : t0 - 30;
+  const v = d.iv, mu = d.rate - v * v / 2, S0 = d.price;
+  const band = (t, k) => { const yr = Math.max(t - t0, 0) / 365; return S0 * Math.exp(mu * yr + k * v * Math.sqrt(yr)); };
+  const tsF = Array.from({length: 41}, (_, i) => t0 + (end - t0) * i / 40);
+  const ys = [...hist.map(h => h[1]), band(end, -2), band(end, 2), ...d.positions.map(p => p.strike)];
+  let ylo = Math.min(...ys), yhi = Math.max(...ys); const pd = (yhi - ylo) * 0.06; ylo -= pd; yhi += pd;
+  const W = mini ? 420 : 1100, H = mini ? 190 : 300, L = 44, R = mini ? 96 : 190, Tp = 12, B = 24;
+  // the past gets a fixed share of the width, so a short horizon isn't squeezed by months of history
+  const fp = mini ? 0.42 : 0.5, xm = L + fp * (W - L - R);
+  const X = t => t <= t0 ? L + (t - x0) / Math.max(t0 - x0, 1) * (xm - L) : xm + (t - t0) / Math.max(end - t0, 1) * (W - R - xm);
+  const Xinv = px => px <= xm ? x0 + (px - L) / (xm - L) * (t0 - x0) : t0 + (px - xm) / (W - R - xm) * (end - t0);
+  const Y = p => Tp + (yhi - p) / (yhi - ylo) * (H - Tp - B);
+  const area = k => `M${tsF.map(t => `${X(t).toFixed(1)},${Y(band(t, k)).toFixed(1)}`).join("L")}L${tsF.slice().reverse().map(t => `${X(t).toFixed(1)},${Y(band(t, -k)).toFixed(1)}`).join("L")}Z`;
+  const yt = niceTicks(ylo, yhi, mini ? 4 : 6).filter(p => p >= ylo && p <= yhi);
+  const lbl = t => new Date(t * 864e5).toLocaleDateString("en-US", {month: "short", day: "numeric"});
+  const xt = mini ? [x0, t0, end] : [x0, (x0 + t0) / 2, t0, (t0 + end) / 2, end];
+  let strikes = "", used = [];
+  d.positions.slice().sort((a, b) => a.strike - b.strike).forEach(p => {
+    const c = p.type === "put" ? "var(--warn)" : "var(--up)", xe = X(day(p.expiry)), y = Y(p.strike);
+    let ly = y + 3.5; while (used.some(u => Math.abs(u - ly) < 12)) ly -= 12; used.push(ly);
+    strikes += `<line x1=${mini ? L : X(t0)} x2=${xe} y1=${y} y2=${y} stroke="${c}" stroke-width=1.4 stroke-dasharray="${mini ? "4 3" : ""}"/>
+      <circle cx=${xe} cy=${y} r=3 fill="${c}"/><text x=${xe + 6} y=${ly} fill="${c}" font-size=10.5>${mini ? kTxt(p.strike) + " strike" : esc(p.label) + " ×" + p.qty}</text>`;
+  });
+  const svg = `<svg viewBox="0 0 ${W} ${H}" width="100%">
+    ${yt.map(p => `<line x1=${L} x2=${W - R} y1=${Y(p)} y2=${Y(p)} stroke="var(--line)" stroke-width=".6"/><text x=${L - 6} y=${Y(p) + 3.5} fill="var(--dim)" font-size=10 text-anchor=end>$${p}</text>`).join("")}
+    ${xt.map(t => `<text x=${X(t)} y=${H - 7} fill="var(--dim)" font-size=10 text-anchor=${t === x0 ? "start" : t === end ? "end" : "middle"}>${t === t0 ? "today" : lbl(t)}</text>`).join("")}
+    <path d="${area(2)}" fill="var(--accent)" fill-opacity=".10"/><path d="${area(1)}" fill="var(--accent)" fill-opacity=".18"/>
+    <line x1=${X(t0)} x2=${X(t0)} y1=${Tp} y2=${H - B} stroke="var(--line)"/>
+    <path d="M${hist.map(([t, c]) => `${X(t).toFixed(1)},${Y(c).toFixed(1)}`).join("L")}" fill=none stroke="var(--text)" stroke-width="1.5"/>
+    ${strikes}
+    <line class=cnx x1=0 x2=0 y1=${Tp} y2=${H - B} stroke="var(--dim)" style="display:none"/></svg>`;
+  const foot = `Shaded: where TQQQ would be about 68% (inner) and 95% (outer) of the time if it moves as its implied volatility says (IV ${(v * 100).toFixed(0)}%, ${esc(d.iv_src)}). Says nothing about direction; not a forecast.`;
+  el.innerHTML = `${mini ? `<div class=meta style="margin:14px 0 4px">WHERE TQQQ COULD BE BY EXPIRATION</div>` : ""}${svg}<div class="meta cnread" style="min-height:17px">${coneSum()}</div><div class=meta style="font-size:11px">${foot}</div>`;
+  const s = el.querySelector("svg"), read = el.querySelector(".cnread"), xh = el.querySelector(".cnx");
+  function coneSum() { if (!d.positions.length) return "No open options: the cone shows TQQQ's likely range over the next month.";
+    const p = d.positions.reduce((a, b) => b.dte > a.dte ? b : a); const t = day(p.expiry);
+    return `By ${lbl(t)}: ${"$" + f2(band(t, -1))}–${"$" + f2(band(t, 1))} (68%) · ${"$" + f2(band(t, -2))}–${"$" + f2(band(t, 2))} (95%)`; }
+  s.addEventListener("mousemove", e => { const b = s.getBoundingClientRect(), px = (e.clientX - b.left) * W / b.width;
+    if (px < L || px > W - R) return; const t = Xinv(px);
+    xh.setAttribute("x1", px); xh.setAttribute("x2", px); xh.style.display = "";
+    if (t <= t0) { const h = hist.reduce((a, b) => Math.abs(b[0] - t) < Math.abs(a[0] - t) ? b : a, hist[0] || [t0, S0]);
+      read.innerHTML = `${lbl(h[0])} · TQQQ closed <b>$${f2(h[1])}</b>`; }
+    else read.innerHTML = `${lbl(t)} · 68%: <b>$${f2(band(t, -1))}–$${f2(band(t, 1))}</b> · 95%: $${f2(band(t, -2))}–$${f2(band(t, 2))}`; });
+  s.addEventListener("mouseleave", () => { xh.style.display = "none"; read.innerHTML = coneSum(); });
 }
 
 /* ---------- CONFIRM ---------- */
