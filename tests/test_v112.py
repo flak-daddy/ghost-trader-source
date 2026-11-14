@@ -69,3 +69,25 @@ def test_reminders_fire_once(home, monkeypatch):
     mon_am = dt.datetime(2026, 11, 16, 7, 45, tzinfo=timeutil.CT)
     assert notify.note_reminders(a.led, mon_am) == 1 and sent[-1][1].startswith("Today: morning one")
     assert notify.note_reminders(a.led, mon_am) == 0
+
+
+def test_earnings_table_nearest_first_with_estimates(tmp_path, monkeypatch):
+    monkeypatch.setenv("GHOST_TRADER_HOME", str(tmp_path))
+    from ghost_trader.api import App
+    a = App(demo=True)
+    a.ind.refresh()
+    a.api_market()
+    for t in ("_earn_thread", "_earnh_thread"):
+        th = getattr(a, t, None)
+        if th:
+            th.join(10)
+    # like Yahoo right after a report: no date announced yet for two of them
+    a.db.x("DELETE FROM earnings WHERE symbol IN ('AAPL','AMZN') AND day>=?", (timeutil.today_ct().isoformat(),))
+    rows = a.api_market()["earnings"]
+    dated = [r for r in rows if r["next"]]
+    assert [r["next"] for r in dated] == sorted(r["next"] for r in dated)
+    assert rows.index(dated[-1]) == len(dated) - 1          # undated ones (if any) come last
+    est = [r for r in rows if r["est"]]
+    assert {r["symbol"] for r in est} == {"AAPL", "AMZN"}
+    assert all(r["days_to"] >= 0 for r in est)
+    assert [r["symbol"] for r in rows] != list(a.EARNINGS)  # demo dates are out of list order

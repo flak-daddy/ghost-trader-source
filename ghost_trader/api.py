@@ -913,6 +913,15 @@ class App:
         for sym in self.EARNINGS:
             ds = [dt.date.fromisoformat(r[0]) for r in self.db.q("SELECT day FROM earnings WHERE symbol=? ORDER BY day", (sym,))]
             nxt = next((d for d in ds if d >= today), None)
+            est = False
+            past = [d for d in ds if d < today]
+            if nxt is None and past:
+                # no date announced yet (usual right after a report): estimate one quarter after the last report
+                est, nxt = True, past[-1]
+                while nxt < today:
+                    nxt += dt.timedelta(days=91)
+                while not marketcal.is_trading_day(nxt):
+                    nxt += dt.timedelta(days=1)
             moves = []
             for d in [d for d in ds if d < today]:
                 before = closes.get(marketcal.prev_trading_day(d).isoformat())
@@ -922,10 +931,11 @@ class App:
             moves = moves[-8:]
             ab = [abs(m["move"]) for m in moves]
             out.append({"symbol": sym, "next": nxt and nxt.isoformat(), "next_txt": nxt and timeutil.fmt_date(nxt.isoformat()),
-                        "days_to": nxt and (nxt - today).days, "moves": moves,
+                        "days_to": nxt and (nxt - today).days, "est": est, "moves": moves,
                         "avg_abs": round(sum(ab) / len(ab), 4) if ab else None,
                         "worst": min((m["move"] for m in moves), default=None), "best": max((m["move"] for m in moves), default=None)})
-        out.sort(key=lambda x: (x["next"] is None, x["next"] or ""))
+        # nearest report first (estimated dates included); no date at all goes last
+        out.sort(key=lambda x: (x["next"] is None, x["next"] or "", x["symbol"]))
         return out
 
     def api_market(self, refresh=False):

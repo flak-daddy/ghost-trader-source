@@ -358,7 +358,7 @@ class DemoProvider:
         today = timeutil.today_ct()
         out = {}
         for i, sym in enumerate(symbols):
-            d = today + dt.timedelta(days=3 + i * 4)
+            d = today + dt.timedelta(days=3 + (len(symbols) - i) * 4)   # not in list order, so sorting shows
             while not marketcal.is_trading_day(d):
                 d += dt.timedelta(days=1)
             out[sym] = [d]
