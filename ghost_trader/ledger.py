@@ -3,8 +3,8 @@
 Money is kept in integer cents. Cash lives in two buckets: `available` (spendable) and `collateral`
 (securing short puts). Every movement is a row in `cash`, so balances on any past day can be rebuilt.
 
-Account value = available + collateral + accrued (unpaid) interest + shares x current price.
-Open options' buy-back prices are deliberately excluded.
+Account value = available + collateral + shares x current price (v1.9.0: interest counts once it's paid on the 15th;
+accrued, unpaid interest is shown separately). Open options' buy-back prices are deliberately excluded.
 """
 import datetime as dt
 import json
@@ -211,7 +211,7 @@ class Ledger:
 
     def account_value_c(self, share_price):
         a, c = self.balances()
-        return a + c + cents(self.accrued()) + cents(self.shares() * (share_price or 0))
+        return a + c + cents(self.shares() * (share_price or 0))
 
     def breakdown(self, share_price):
         a, c = self.balances()
@@ -220,7 +220,7 @@ class Ledger:
         return {
             "available_c": a, "collateral_c": c, "accrued": round(acc, 6), "accrued_c": cents(acc),
             "shares": sh, "share_price": share_price, "shares_value_c": cents(sh * (share_price or 0)),
-            "account_value_c": a + c + cents(acc) + cents(sh * (share_price or 0)),
+            "account_value_c": a + c + cents(sh * (share_price or 0)),
         }
 
     # ------------------------------------------------------------------ order checking
@@ -731,7 +731,7 @@ class Ledger:
             a, c = self.balances()
             acc = self.accrued()
             sh = self.shares()
-        av = a + c + cents(acc) + cents(sh * (share_price or 0))
+        av = a + c + cents(sh * (share_price or 0))
         self.db.x("INSERT OR REPLACE INTO snapshots(run_id,day,ts,available_c,collateral_c,accrued,shares,share_price,"
                   "account_value_c,tqqq_close,marks,estimated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                   (r["id"], d, timeutil.iso(ts), a, c, acc, sh, share_price, av, tqqq_close,

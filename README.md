@@ -27,7 +27,7 @@ New to options? Read **[MANUAL.md](MANUAL.md)**: cash-secured puts, covered call
   least $0.01 in the money is exercised or assigned.
 - **Interest:** all cash earns the T-bill rate. It accrues daily and is paid on the 15th (or the business day
   before, when the 15th isn't a trading day).
-- **Account value:** cash + collateral + accrued interest + shares at market. What it would cost to buy back
+- **Account value:** cash + collateral + shares at market (interest counts once it's paid). What it would cost to buy back
   your open options is not counted.
 
 ## Calendar and alerts

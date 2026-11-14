@@ -72,7 +72,6 @@ document.addEventListener("mousemove", e => {
     hov.innerHTML = `<div class="row tot"><span>Total account value</span><span>${mc(b.account_value_c)}</span></div>
       <div class=row><span class=meta>Available</span><span>${mc(b.available_c)}</span></div>
       <div class=row><span class=meta>Collateral</span><span>${mc(b.collateral_c)}</span></div>
-      <div class=row><span class=meta>Accrued interest</span><span>${mc(b.accrued_c)}</span></div>
       <div class=row><span class=meta>Shares value <span style="opacity:.8">(${b.shares} × $${f2(S())})</span></span><span>${mc(b.shares_value_c)}</span></div>`;
     hov.style.display = "block";
     hov.style.left = Math.min(e.clientX + 14, innerWidth - 310) + "px"; hov.style.top = (e.clientY + 18) + "px";
@@ -194,7 +193,7 @@ async function renderPortfolio() {
   const shRow = sh ? `<tr class="${ui.pfMode === "shares" ? "flash" : ""}"><td class=l>TQQQ shares<div class=meta>${lots}${covering.length ? ` · <span class=pill>${st.locked} covering ${esc(covering.join(", "))}</span>` : ""} · ${Math.max(0, sh - st.locked)} free</div></td><td>${sh}</td><td>${f2(st.avg_cost)}</td><td>${f2(S())}</td><td>${mc(b.shares_value_c)}</td><td class="${S() >= st.avg_cost ? "up" : "down"}">${money((S() - st.avg_cost) * sh, true)}</td><td class="${S() >= st.avg_cost ? "up" : "down"}">${pct((S() - st.avg_cost) / st.avg_cost)}</td><td><button class="btn small" onclick="openShares('sell_shares')">Sell</button></td></tr>`
     : `<tr><td colspan=8 class="l meta" style="padding:16px 8px">No shares.</td></tr>`;
   $("#main").innerHTML = `${bar}${alerts}<div class=cards style="margin-top:10px">${cards}</div>
-    <div class=meta>Account value = cash + collateral + accrued interest + shares (option buy-back prices not counted)</div>
+    <div class=meta>Account value = cash + collateral + shares · interest counts once it's paid on the 15th · option buy-back prices not counted</div>
     <h2>Open options</h2><table><thead><tr><th class=l>Contract</th><th>Contracts</th><th>${st.positions.some(p => p.side === "long") ? "Opened at" : "Sold at"}</th><th>Mark</th><th>Collateral / cover</th><th>Distance</th><th>DTE</th><th>P&L</th><th>% of premium</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     <h2 id=sharesH style="display:flex;justify-content:space-between;align-items:center">Shares <button class="btn small" onclick="openShares('buy_shares')">Buy shares…</button></h2><table><thead><tr><th class=l>Holding</th><th>Qty</th><th>Avg cost</th><th>Price</th><th>Value</th><th>P&L</th><th>%</th><th></th></tr></thead><tbody>${shRow}</tbody></table>
     <div id=calendar></div>`;
@@ -958,7 +957,8 @@ async function renderSettings() {
     <div class=row><label>Current run</label><span>${s.run ? "Started " + esc(s.run.start) + " · " + mc(s.run.cash_c) : "none"}</span></div>
     <div class=row style="align-items:flex-start"><label>Past runs</label><span>${s.past.length ? s.past.map(r => `<div>${esc(r.start)} → ${esc(r.end)} · ${mc(r.final_c)} <button class="btn small" data-rexp="${r.id}">Save CSV…</button></div>`).join("") : `<span class=meta>none yet · closed runs' CSVs can be re-exported here</span>`}</span></div>
     <div class=row><label>Data folder</label><span><span style="color:var(--accent);cursor:pointer" id=openDir>${I("folder")} ${esc(s.data_dir.replace(/^\/home\/[^/]+/, "~"))}/</span> <span class=meta>opens in your file manager</span></span></div>
-    <div class=row><label>Last backup</label><span class=meta>${esc(s.last_backup || "none yet")}</span></div>
+    <div class=row><label>Last backup</label><span class=meta>${esc(s.last_backup || "none yet")} · <span class=meta>automatic at every launch and before updates · last 30 kept</span></span></div>
+    <div class=row><label>Backup & restore</label><span><button class="btn small" id=bkNow>Back up now</button> <button class="btn small" id=bkExport>Export ledger…</button> <button class="btn small" id=bkRestore>Restore…</button></span></div>
     <div class=row><label>Tags</label><span>${s.tags.map(t => `<span class=tag>${esc(t.tag)}</span>`).join("") || `<span class=meta>none yet</span>`} <button class="btn small" id=tagMgr>Manage</button></span></div>
     <div class=row><label>Version</label><span>v${esc(s.version)} <span class=meta>· ${s.install === "system" ? "installed as an Arch package · updates noted at startup" : "updates offered at startup"}</span></span></div></div></div>
   ${s.run ? `<div class=card style="max-width:1150px;margin-top:16px;border-color:color-mix(in srgb,var(--danger) 50%,var(--line))">
@@ -973,6 +973,9 @@ async function renderSettings() {
   $$("[data-th]").forEach(b => b.onclick = async () => { ui.theme = b.dataset.th; applyTheme(); await api("settings_set", {theme: ui.theme}); render(); });
   $$("[data-rexp]").forEach(b => b.onclick = async () => { const r = await api("export_run", {id: +b.dataset.rexp}); if (r.ok) toast(`${I("check")} Saved ${esc(r.path)}`); else if (r.error) toast(esc(r.error)); });
   $("#openDir").onclick = () => api("open_folder");
+  $("#bkNow").onclick = async () => { const r = await api("backup_now"); if (r.ok) { toast(`${I("check")} Backed up (${esc(r.name)})`); render(); } else toast(esc(r.error || "Backup failed")); };
+  $("#bkExport").onclick = async () => { const r = await api("export_ledger"); if (r.ok) toast(`${I("check")} Saved ${esc(r.path)}`, 5000); else if (r.error) toast(esc(r.error)); };
+  $("#bkRestore").onclick = showRestore;
   $$("[data-ar]").forEach(b => b.onclick = async () => { await save({auto_refresh: +b.dataset.ar}); ui.autoMin = +b.dataset.ar; setAutoRefresh(); render(); });
   $$("[data-eod]").forEach(b => b.onclick = async () => { await save({eod_summary: b.dataset.eod === "1"}); render(); });
   $("#testEod").onclick = async () => { const r = await api("test_notify", {kind: "eod"}); toast((r.ok ? I("check") + " " : I("x") + " ") + esc(r.msg), 5000); };
@@ -980,6 +983,40 @@ async function renderSettings() {
   $("#testNotify").onclick = async () => { const r = await api("test_notify"); toast((r.ok ? I("check") + " " : I("x") + " ") + esc(r.msg), 5000); };
   $("#tagMgr").onclick = () => showTags(s.tags);
   if ($("#closeRunBtn")) $("#closeRunBtn").onclick = closeRun;
+}
+/* ---------- BACKUP & RESTORE (v1.9.0) ---------- */
+async function showRestore() {
+  const b = await api("backups");
+  const rows = b.backups.map((x, i) => `<tr class=click data-bk="${esc(x.name)}"><td class=l><b>${esc(x.when)}</b><div class=meta>${esc(x.why)}</div></td><td class=meta>${x.kb} KB</td></tr>`).join("");
+  $("#overlay").innerHTML = `<div class=scrim><div class=modal style="width:680px"><h3>Restore the ledger</h3>
+    <div class=meta>Pick a backup to see what's in it before anything changes. Your ledger as it is now is backed up first, so a restore can itself be undone.</div>
+    <div style="max-height:300px;overflow:auto;margin-top:10px"><table class=mini><tbody>${rows || `<tr><td class="l meta">No backups yet.</td></tr>`}</tbody></table></div>
+    <div style="margin-top:10px"><span class=meta>Or a ledger file, e.g. one you exported:</span> <input type=file id=rsFile accept=".db,application/octet-stream"></div>
+    <div id=rsPrev></div>
+    <div class=actions><button class=btn onclick="closeOverlay()">Cancel</button><button class="btn danger" id=rsGo disabled>Restore and restart</button></div></div></div>`;
+  let source = null;
+  const preview = async args => {
+    $("#rsGo").disabled = true; $("#rsPrev").innerHTML = `<div class=meta style="margin-top:10px"><span class=spin>${I("spin")}</span> Reading…</div>`;
+    const r = await api("restore_preview", args);
+    if (r.error) { $("#rsPrev").innerHTML = `<div class="alert e" style="margin-top:10px"><span class=ic>${I("warn")}</span><span>${esc(r.error)}</span></div>`; return; }
+    source = r.source;
+    const col = i => [i.run_start_txt ? `Run started ${esc(i.run_start_txt)} · ${mc(i.run_cash_c)}` : "No open run", `${plural(i.trades, "trade")} · ${plural(i.events, "History event")}`,
+      i.last_day_txt ? `Last snapshot ${esc(i.last_day_txt)} · ${mc(i.last_value_c)}` : "No snapshots", i.last_txt ? `Last activity ${esc(i.last_txt)}` : "—", plural(i.closed_runs, "closed run")];
+    const a = col(r.backup), c = col(r.current);
+    $("#rsPrev").innerHTML = `<table class=mini style="margin-top:12px;table-layout:fixed;width:100%"><colgroup><col style="width:72px"><col><col></colgroup><thead><tr><th class=l></th><th class=l>${esc(r.label)}</th><th class=l>Your ledger now</th></tr></thead><tbody>
+      ${["Run", "Activity", "Account", "Latest", "History"].map((h, i) => `<tr><td class="l meta">${h}</td><td class=l style="white-space:normal">${a[i]}</td><td class=l style="white-space:normal">${c[i]}</td></tr>`).join("")}</tbody></table>
+      <div class="alert w" style="margin-top:10px"><span class=ic>${I("warn")}</span><span>Everything after this backup is replaced (it stays in the safety backup made first). Ghost Trader restarts and runs its usual startup refresh.</span></div>`;
+    $("#rsGo").disabled = false;
+  };
+  $$("[data-bk]").forEach(tr => tr.onclick = () => { $$("[data-bk]").forEach(x => x.classList.remove("cur")); tr.classList.add("cur"); $("#rsFile").value = ""; preview({name: tr.dataset.bk}); });
+  $("#rsFile").onchange = e => { const f = e.target.files[0]; if (!f) return; $$("[data-bk]").forEach(x => x.classList.remove("cur"));
+    const rd = new FileReader(); rd.onload = () => preview({data: rd.result, filename: f.name}); rd.readAsDataURL(f); };
+  $("#rsGo").onclick = async () => {
+    $("#rsGo").disabled = true; $("#rsGo").innerHTML = `<span class=spin>${I("spin")}</span> Restoring…`;
+    const r = await api("restore_apply", {source});
+    if (r.error) { toast(esc(r.error)); $("#rsGo").disabled = false; $("#rsGo").textContent = "Restore and restart"; return; }
+    $("#overlay").innerHTML = ""; $("#splash").innerHTML = `<div class=splash><div class=modal><h3>${LOGO} Restarting…</h3><div class=meta>Ledger restored. Ghost Trader is restarting with it. If this is a browser tab, reopen Ghost Trader.</div></div></div>`;
+  };
 }
 function showTags(tags) {
   $("#overlay").innerHTML = `<div class=scrim><div class=modal style="width:520px"><h3>Tags</h3><div class=meta>Type any new tag in a ticket; it's created on first use and autocompletes after that. Changes here apply to every trade that carries the tag.</div>
@@ -1002,7 +1039,7 @@ async function closeRun() {
     <div class=meta>${esc(p.start)} → ${esc(p.end)} (${plural(p.days, "day")}) · started with ${mc(p.start_cash_c)}. This is permanent.</div>
     <table class=mini style="margin:10px 0"><tbody><tr><td class=l>Available</td><td>${mc(p.available_c)}</td></tr><tr><td class=l>Collateral${p.open_puts ? ` <span class=meta>(${plural(p.open_puts, "open put")}: counted at collateral only)</span>` : ""}</td><td>${mc(p.collateral_c)}</td></tr>
     <tr><td class=l>Accrued interest (paid out now)</td><td>${mc(p.accrued_c)}</td></tr><tr><td class=l>${p.shares} TQQQ @ ${f2(p.share_price)}${p.open_calls ? ` <span class=meta>(open calls ignored)</span>` : ""}</td><td>${mc(p.shares_value_c)}</td></tr>
-    <tr><td class=l><b>Final value</b></td><td><b>${mc(p.account_value_c)}</b></td></tr></tbody></table>
+    <tr><td class=l><b>Final value</b></td><td><b>${mc(p.final_c)}</b></td></tr></tbody></table>
     <div class=row><label>Type the final value to confirm</label><input id=crv placeholder="${p.final}" style="width:160px"></div><div id=crm class=meta style="text-align:right">&nbsp;</div>
     <div class=actions><button class=btn onclick="closeOverlay()">Cancel</button><button class="btn danger" id=crb disabled>Close run and save CSV…</button></div></div></div>`;
   const norm = v => { const n = parseFloat(v.replace(/[$,\s]/g, "")); return isNaN(n) ? null : n.toFixed(2); };

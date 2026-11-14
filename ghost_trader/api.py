@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import SYMBOL, __version__, alerts, config, csvout, db as dbm, events, indicators, manual, marketcal, notify, perf, timeutil
+from . import SYMBOL, __version__, alerts, config, csvout, db as dbm, events, indicators, ivhist, manual, marketcal, notify, perf, timeutil
 from .ledger import Ledger, TradeError, cents, money, strike_txt
 from .market import DemoProvider, Quotes, Rates, YahooProvider, ncdf
 from .startup import Startup
@@ -941,7 +941,8 @@ class App:
         S, b = self._final()
         start = dt.date.fromisoformat(r["start_day"])
         today = timeutil.today_ct()
-        return {**b, "final": f"{b['account_value_c'] / 100:.2f}", "start": start.strftime("%b %-d, %Y"),
+        final_c = b["account_value_c"] + b["accrued_c"]   # closing pays the accrued interest out first
+        return {**b, "final_c": final_c, "final": f"{final_c / 100:.2f}", "start": start.strftime("%b %-d, %Y"),
                 "end": today.strftime("%b %-d, %Y"), "days": (today - start).days, "start_cash_c": r["start_cash_c"],
                 "open_puts": len([p for p in self.led.positions() if p["type"] == "put"]),
                 "open_calls": len([p for p in self.led.positions() if p["type"] == "call"]),
@@ -955,8 +956,8 @@ class App:
             v = float(str(typed).replace("$", "").replace(",", "").strip())
         except ValueError:
             return {"error": "Type the final value exactly, like 101234.56"}
-        if cents(v) != pre["account_value_c"]:
-            return {"error": f"That doesn't match the final value ({money(pre['account_value_c'])})."}
+        if cents(v) != pre["final_c"]:
+            return {"error": f"That doesn't match the final value ({money(pre['final_c'])})."}
         path = self._ask_save(pre["name"])
         if not path:
             return {"cancelled": True}
@@ -988,7 +989,7 @@ class App:
                 ("Dividends", f"{self.led.dividends_c() / 100:.2f}"),
                 ("Trades", counts.get("Trade", 0) + counts.get("Shares", 0)),
                 ("Assignments", counts.get("Assigned", 0)), ("Called away", counts.get("Called away", 0)),
-                ("Valuation", "account value = cash + collateral + accrued interest + shares at market; "
+                ("Valuation", "account value = cash + collateral + shares at market (interest counted once paid); "
                               "open option prices not counted"),
             ]
             self.led.event("Run", "Run closed", f"Final value {money(av)} · {(av / r['start_cash_c'] - 1) * 100:.2f}% "
@@ -1007,6 +1008,87 @@ class App:
         if not r or not r["csv_text"]:
             return {"error": "No CSV saved for that run."}
         return self._save_text(r["csv_name"], r["csv_text"])
+
+    # ------------------------------------------------------------------ backup & restore (v1.9.0)
+    BACKUP_LABELS = {"startup": "at startup", "pre-update": "before an update", "manual": "by you",
+                     "pre-restore": "before a restore"}
+
+    def _backups_dir(self):
+        return config.data_dir() / "backups"
+
+    def api_backups(self):
+        out = []
+        for f in sorted(self._backups_dir().glob("ledger-*.db"), key=lambda f: (f.stat().st_mtime_ns, f.name), reverse=True):
+            parts = f.stem.split("-", 3)          # ledger-YYYYMMDD-HHMMSS-label
+            label = parts[3] if len(parts) > 3 else ""
+            when = dt.datetime.fromtimestamp(f.stat().st_mtime, dt.timezone.utc)
+            out.append({"name": f.name, "when": timeutil.fmt_ct(when, with_date=True), "why": self.BACKUP_LABELS.get(label, label),
+                        "kb": max(1, round(f.stat().st_size / 1024))})
+        return {"backups": out, "folder": str(self._backups_dir()), "keep": 30}
+
+    def api_backup_now(self):
+        p = self.backup("manual")
+        return {"ok": True, "name": p.name, **self.api_backups()}
+
+    def api_export_ledger(self):
+        name = f"ghost-trader-ledger-{timeutil.today_ct().isoformat()}.db"
+        path = self._ask_save(name)
+        if not path:
+            return {"cancelled": True}
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.db.backup(path)
+        return {"ok": True, "path": str(path)}
+
+    def _restore_source(self, name=None, data=None):
+        """The file a restore would come from: an in-app backup by name, or an uploaded file (base64)."""
+        if name:
+            f = self._backups_dir() / Path(name).name
+            if not f.exists() or not f.name.startswith("ledger-"):
+                raise ValueError("That backup isn't there any more.")
+            return f
+        if data:
+            import base64
+            f = config.data_dir() / "restore-upload.db"
+            f.write_bytes(base64.b64decode(data.split(",", 1)[-1]))
+            return f
+        raise ValueError("Pick a backup or a file to restore.")
+
+    def api_restore_preview(self, name=None, data=None, filename=None):
+        try:
+            src = self._restore_source(name, data)
+            info = dbm.inspect_ledger(src)
+        except ValueError as e:
+            return {"error": str(e)}
+        cur = dbm.inspect_ledger(config.db_path(), live=True)
+        fmt = lambda i: {**i, "run_start_txt": i["run_start"] and timeutil.fmt_date(i["run_start"]),
+                         "last_txt": i["last_event"] and timeutil.fmt_ct(timeutil.parse(i["last_event"]), with_et=False, with_date=True),
+                         "last_day_txt": i["last_day"] and timeutil.fmt_date(i["last_day"])}
+        label = filename or "The chosen file"
+        if name:
+            b = next((x for x in self.api_backups()["backups"] if x["name"] == name), None)
+            label = f"Backup {b['when'].split(' (')[0]}" if b else name
+        return {"ok": True, "source": name or "upload", "label": label,
+                "backup": fmt(info), "current": fmt(cur)}
+
+    def api_restore_apply(self, source):
+        src = self._backups_dir() / Path(source).name if source != "upload" else config.data_dir() / "restore-upload.db"
+        try:
+            info = dbm.inspect_ledger(src)
+        except (ValueError, FileNotFoundError) as e:
+            return {"error": str(e)}
+        safety = self.backup("pre-restore")
+        what = Path(source).name if source != "upload" else "a file you chose"
+        bits = [f"Restored the ledger from {what}"]
+        if info["last_event"]:
+            bits.append(f"last activity in it {timeutil.fmt_ct(timeutil.parse(info['last_event']), with_date=True)}")
+        bits.append(f"the ledger as it was just before is saved as {safety.name}")
+        (config.data_dir() / "restore-note.txt").write_text("; ".join(bits) + ".")
+        log.info("restoring ledger from %s (safety copy %s)", src, safety)
+        self.restore_backup(src)
+        if source == "upload":
+            src.unlink(missing_ok=True)
+        self.request_restart()
+        return {"ok": True, "restarting": True}
 
     # ------------------------------------------------------------------ files & folders
     def _ask_save(self, name):
@@ -1093,6 +1175,7 @@ class App:
                 errs.append(f"{exp}: {e}")
         self.data_asof = timeutil.now()
         self.ind.warm()
+        threading.Thread(target=ivhist.record_safe, args=(self,), daemon=True).start()
         return {"ok": not errs, "errors": errs, "asof": timeutil.fmt_ct(self.data_asof)}
 
     # ------------------------------------------------------------------ readings vs outcomes

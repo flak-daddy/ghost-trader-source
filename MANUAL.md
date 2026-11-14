@@ -415,7 +415,9 @@ Your cash sits in two buckets:
 - **Available:** cash you can spend or use as new collateral.
 - **Collateral:** cash set aside for open puts.
 
-> **Account value = Available + Collateral + accrued interest + shares × TQQQ price**
+> **Account value = Available + Collateral + shares × TQQQ price**
+
+Interest counts once it's paid on the 15th (see below). Until then it shows separately, as accrued, on the Interest earned card.
 
 Open options aren't counted at their current buy-back price. Premium goes into Available the moment you sell, and the effect of an open option shows up in the P&L column instead. This keeps the account value from jumping around with every quote.
 
@@ -554,7 +556,7 @@ All your cash, Available and Collateral both, earns interest:
 - The rate is the 3-month Treasury bill rate, minus an optional **haircut** you can set to mimic a broker that pays less.
 - Interest accrues every day, including weekends and holidays.
 - It's paid on the **15th** of each month, or the business day before if the 15th is a weekend or holiday. Once paid, it earns interest too.
-- Accrued (not yet paid) interest is included in account value.
+- Accrued (not yet paid) interest is **not** in account value (since v1.9.0): it's added when it's paid, so account value steps up on the 15th. The Interest earned card shows what's accrued so far. Closing a run pays it out first, so the final value includes it.
 
 ### Dividends
 
@@ -598,6 +600,11 @@ With only a few trades in a group, the numbers say very little.
 
 **Auto-refresh** re-fetches TQQQ and the quotes for your open positions every 5, 10 or 15 minutes while the market is open (10 by default), so P&L, alerts and the header stay current without clicking Refresh. It pauses the screen update while a ticket or dialog is open. Quotes are still Yahoo's, about 15 minutes behind.
 - **Runs & app:** the current run, past runs, closing a run, the data folder, the last backup, and the version.
+- **Backup & restore** (in Runs & app): Ghost Trader backs up the ledger by itself at every launch and before every update, and keeps the last 30.
+  - **Back up now** makes one on the spot.
+  - **Export ledger…** saves a copy wherever you choose, e.g. to keep outside the data folder or to move a run to another computer.
+  - **Restore…** lists the backups, newest first. Pick one (or a ledger file you exported) and it shows what's in it next to your ledger as it is now: the run, the number of trades, the last snapshot and the last activity. **Restore and restart** first backs up your current ledger (so a restore can itself be undone), puts the chosen one in its place and restarts. History notes the restore.
+  - A ledger from a newer version of Ghost Trader can't be restored until you update.
 - **Appearance:** theme (light, dark, or match system).
 
 **Closing a run** ends it for good. You type the final account value to confirm. Ghost Trader exports the run's full history to CSV, then you can start a new run.

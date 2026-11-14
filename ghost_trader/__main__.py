@@ -146,6 +146,12 @@ def main(argv=None):
     srv = Server(app, port=args.port).start()
     logging.info("serving %s", srv.url.split("?")[0])
     if args.serve:
+        from . import updater
+
+        def _restart():
+            srv.stop()
+            updater.restart()
+        app.on_restart = _restart
         print(srv.url, flush=True)
         try:
             srv.thread.join()

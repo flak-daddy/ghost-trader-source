@@ -60,6 +60,14 @@ CREATE TABLE trade_readings(event_id INTEGER PRIMARY KEY, asof TEXT NOT NULL, da
     3: """
 CREATE TABLE earnings(symbol TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY(symbol, day));
 """,
+    4: """
+CREATE TABLE iv_history(day TEXT PRIMARY KEY, iv REAL NOT NULL, price REAL, asof TEXT NOT NULL, points TEXT);
+""",
+    # v1.9.0: account value no longer counts accrued (unpaid) interest; restate past snapshots the same way
+    5: """
+UPDATE snapshots SET account_value_c = available_c + collateral_c
+  + CAST(ROUND(COALESCE(shares, 0) * COALESCE(share_price, 0) * 100) AS INTEGER);
+""",
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 
@@ -168,6 +176,37 @@ def rotate_backups(db, folder, keep=30, label="startup"):
     for old in files[:-keep]:
         old.unlink(missing_ok=True)
     return dest
+
+
+def inspect_ledger(path, live=False):
+    """What a ledger file holds, without opening it as the live ledger. Raises ValueError if it isn't a Ghost
+    Trader ledger this version can use."""
+    import sqlite3
+    try:
+        # immutable: a backup or upload is read as-is, without leaving -wal/-shm files beside it
+        c = sqlite3.connect(f"file:{path}?mode=ro" + ("" if live else "&immutable=1"), uri=True)
+        try:
+            names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not {"meta", "runs", "events"} <= names:
+                raise ValueError("That file isn't a Ghost Trader ledger.")
+            r = c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            v = int(r[0]) if r else 0
+            if v > SCHEMA_VERSION:
+                raise ValueError(f"That ledger is from a newer Ghost Trader (schema {v}); update the app first.")
+            run = c.execute("SELECT start_day, start_cash_c FROM runs WHERE closed_at IS NULL ORDER BY id DESC LIMIT 1").fetchone()
+            closed = c.execute("SELECT COUNT(*) FROM runs WHERE closed_at IS NOT NULL").fetchone()[0]
+            ev = c.execute("SELECT COUNT(*), MAX(ts) FROM events").fetchone()
+            trades = c.execute("SELECT COUNT(*) FROM events WHERE kind='Trade'").fetchone()[0]
+            snap = None
+            if "snapshots" in names:
+                snap = c.execute("SELECT day, account_value_c FROM snapshots ORDER BY day DESC LIMIT 1").fetchone()
+        finally:
+            c.close()
+    except sqlite3.DatabaseError as e:
+        raise ValueError(f"That file isn't a Ghost Trader ledger ({e}).") from None
+    return {"schema": v, "run_start": run and run[0], "run_cash_c": run and run[1], "closed_runs": closed,
+            "events": ev[0], "last_event": ev[1], "trades": trades,
+            "last_day": snap and snap[0], "last_value_c": snap and snap[1]}
 
 
 def restore_backup(src, dest):

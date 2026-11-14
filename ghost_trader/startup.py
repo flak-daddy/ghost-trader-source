@@ -8,7 +8,7 @@ import threading
 import time
 import traceback
 
-from . import SYMBOL, __version__, config, marketcal, timeutil, updater
+from . import SYMBOL, __version__, config, ivhist, marketcal, timeutil, updater
 from .ledger import money
 
 log = logging.getLogger("ghost_trader.startup")
@@ -111,6 +111,7 @@ class Startup:
                 a.led.event("App", "Startup refresh", " · ".join(f"{s['name']}: {s['detail']}" for s in self.steps
                                                                   if s["detail"]), ts=self.finished)
             self.state = "done"
+            threading.Thread(target=ivhist.record_safe, args=(a,), daemon=True).start()
         except Exception as e:  # noqa: BLE001 - never leave the UI hanging
             log.exception("startup crashed")
             a.log_error("Startup problem", f"Something unexpected went wrong during the startup refresh: {e}",
@@ -147,6 +148,10 @@ class Startup:
     # ------------------------------------------------------------------ steps
     def _s_update(self):
         a = self.app
+        rn = config.data_dir() / "restore-note.txt"
+        if rn.exists():
+            a.led_event_safe("App", "Ledger restored", rn.read_text().strip())
+            rn.unlink(missing_ok=True)
         note = config.data_dir() / "rollback-note.txt"
         if note.exists():
             a.led_event_safe("Update", "Update rolled back", note.read_text().strip(), warning=True)
