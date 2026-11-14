@@ -166,3 +166,6 @@ input.bad{border-color:var(--down)}
 .ctxmenu button:hover{background:var(--panel2)}
 
 .pfread{font-size:12px;color:var(--dim);min-height:17px;margin-top:2px}.pfsvg{cursor:crosshair}
+.volcharts{display:grid;grid-template-columns:1fr 1fr;gap:16px;border-top:1px solid var(--line);margin-top:6px;padding-top:8px}
+.volcharts circle[data-tip]{cursor:default}
+.itrades{border-top:1px solid var(--line);margin-top:4px;padding-top:4px;font-size:12px}

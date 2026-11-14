@@ -292,7 +292,7 @@ The fund rebalances once a day, but the market can move a lot between one close 
 
 ## Indicators
 
-Ghost Trader's **Indicators** tab shows three common ways traders read the market: the stochastic oscillator on TQQQ, the VIX, and CNN's Fear & Greed index. This part explains what each one measures. None of them predicts prices. They describe where things stand right now compared with the recent past.
+Ghost Trader's **Indicators** tab shows three common ways traders read the market: the stochastic oscillator on TQQQ, the VIX, and CNN's Fear & Greed index, plus TQQQ's own implied volatility. This part explains what each one measures. None of them predicts prices. They describe where things stand right now compared with the recent past.
 
 ### The stochastic oscillator
 
@@ -344,6 +344,25 @@ CNN's **Fear & Greed index** combines seven market measures (including stock mom
 | 76–100 | Extreme greed |
 
 CNN doesn't publish an official data feed. Ghost Trader reads the same data CNN's own web page loads. If CNN changes its site, this can stop working without warning. The tab then says Fear & Greed is unavailable and keeps showing everything else.
+
+### Implied volatility: IV rank and the Volatility group (v1.11.0)
+
+**Implied volatility (IV)** is the size of the move the options market is pricing into TQQQ, as a yearly percentage. Ghost Trader works out one number a day, TQQQ's **30-day at-the-money IV**, from the option chains it already pulls, and saves it.
+
+- **IV rank** puts today's IV between the lowest (0) and highest (100) reading of the past year.
+- **IV percentile** is the share of past-year days when IV was lower than today.
+
+High rank or percentile means TQQQ's options are expensive compared with its own recent history, which is generally better for an option seller; low means premium is thin. Both are only as good as the history behind them: Ghost Trader started saving IV in v1.9.0, so until it has about a year of readings the tile says how many days it's based on.
+
+The **Volatility** group (with its own range buttons) shows:
+
+- **Implied vs. realized:** the saved 30-day IV next to **realized volatility**, how much TQQQ actually moved over the last 30 trading days, annualized. IV usually runs above realized; that gap is what option sellers are paid for.
+- **IV by expiration** (the term structure): at-the-money IV for each expiration over the next few months, from today's chains. It usually rises gently with time. When near-term IV is above longer-term IV, the market expects a bumpy few weeks.
+- **IV by strike** (the skew) for the expiration nearest 30 days: puts below TQQQ's price in amber, calls above in green. Puts usually carry more IV than calls the same distance away.
+
+### Your trades on the charts (v1.11.0)
+
+**Your trades: On** (top right) draws this run's trades on every chart: a ◆ on the price chart and a faint line on the others. Blue is an opening trade, gray a closing one, amber an assignment or shares called away, green an option that expired worthless. Hover a day to see the trades in the box; the Table view gets a "Your trades" column. Turn it **Off** for clean charts; the setting is remembered.
 
 ### Readings saved with your trades
 

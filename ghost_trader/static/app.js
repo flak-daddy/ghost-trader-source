@@ -40,7 +40,7 @@ async function api(name, args = {}) {
 /* ---------- state ---------- */
 let st = null, boot = {};
 let ui = {tab: "Portfolio", pfMode: null, flashPos: null, chainExp: null, chainView: "both", flashStrike: null,
-  hFilter: "All", hTag: null, hDay: null, hEvent: null, hExpand: null, calMonth: null, lot: null, lotEvent: null, perfDay: null, pin: null, chartTable: false, theme: "system", indN: "14", indRanges: {px: "3M", st: "3M", mood: "3M"}, outRange: "3M", indTable: false};
+  hFilter: "All", hTag: null, hDay: null, hEvent: null, hExpand: null, calMonth: null, lot: null, lotEvent: null, perfDay: null, pin: null, chartTable: false, theme: "system", indN: "14", indRanges: {px: "3M", st: "3M", mood: "3M", vol: "3M"}, indTrades: false, outRange: "3M", indTable: false};
 const S = () => (st && st.price) || 0;
 const label = p => p.label;
 
@@ -446,8 +446,13 @@ function ichart(c, N, xlab) {
   let xl = "";
   if (xlab && N > 1) { const tk = [...new Set([0, Math.round((N - 1) / 4), Math.round((N - 1) / 2), Math.round(3 * (N - 1) / 4), N - 1])];
     xl = tk.map(i => `<text x=${X(i)} y=${H - 6} fill="var(--dim)" font-size=11 text-anchor=${i === 0 ? "start" : i === N - 1 ? "end" : "middle"}>${fmtDay(xlab[i])}</text>`).join(""); }
+  let mk = "";
+  for (const m of c.marks || []) { const x = X(m.i);
+    if (m.diamond && c.series[0].v[m.i] != null) { const y = Y(c.series[0].v[m.i]);
+      mk += `<line x1="${x}" x2="${x}" y1="${T}" y2="${H - B}" stroke="${m.color}" stroke-width="1" opacity=".22"/><path d="M${x},${y - 6}L${x + 6},${y}L${x},${y + 6}L${x - 6},${y}Z" fill="${m.color}" stroke="var(--panel)" stroke-width="1.5"/>`; }
+    else mk += `<line x1="${x}" x2="${x}" y1="${T}" y2="${H - B}" stroke="${m.color}" stroke-width="1" opacity=".28"/>`; }
   return `<div class=ichart><div class=ihead><b>${c.title}</b>${c.ctl || ""}${c.legend || ""}<span class=meta>${c.sub || ""}</span></div>
-    <svg viewBox="0 0 ${IW} ${H}" width="100%" data-g="${c.g || ""}" data-t=${T} data-b=${H - B}>${g}${lines}${endl}${xl}<line class=xh x1=0 x2=0 y1=${T} y2=${H - B} stroke="var(--dim)" stroke-width=1 style="display:none"/></svg></div>`;
+    <svg viewBox="0 0 ${IW} ${H}" width="100%" data-g="${c.g || ""}" data-t="${T}" data-b="${H - B}">${g}${mk}${lines}${endl}${xl}<line class=xh x1=0 x2=0 y1=${T} y2=${H - B} stroke="var(--dim)" stroke-width=1 style="display:none"/></svg></div>`;
 }
 function niceTicks(lo, hi, n) { const st = niceStep(hi - lo, n), out = []; const a = Math.floor(lo / st + 1e-9) * st, b = Math.ceil(hi / st - 1e-9) * st; for (let v = a; v <= b + 1e-9; v += st) out.push(+v.toFixed(6)); return out; }
 const RANGES = ["14D", "1M", "3M", "6M", "1Y", "5Y"], RDAYS = {"14D": 14, "1M": 31, "3M": 92, "6M": 183, "1Y": 366, "5Y": 1827};
@@ -458,6 +463,39 @@ function fgTint(sc) {
   return {bg: `color-mix(in srgb, ${c} ${Math.round(k * 11)}%, var(--panel))`, bd: `color-mix(in srgb, ${c} ${Math.round(k * 40)}%, var(--line))`};
 }
 const rangeFor = day => { const back = (Date.now() - new Date(day + "T12:00:00")) / 864e5; return RANGES.find(r => RDAYS[r] >= back + 1) || "5Y"; };
+function ivTile(v) {
+  if (!v) return `<div class=card><div class=thead>IV = —</div><div class=meta>TQQQ's 30-day at-the-money IV shows here once Ghost Trader has saved a reading (after the next quote refresh).</div></div>`;
+  const few = v.n < 60;
+  const tip = `IV rank: where today's IV sits between the lowest (0) and highest (100) reading of the past year. IV percentile: the share of past-year days with lower IV. Both use the readings Ghost Trader has saved (${plural(v.n, "day")} so far${few ? "; a full year is about 252" : ""}). High = options are expensive relative to TQQQ's own history, which favors selling premium.`;
+  return `<div class=card data-tip="${esc(tip)}"><div class=thead>IV = ${(v.iv * 100).toFixed(0)}%</div>
+    <div class=meta>rank <b>${v.rank ?? "—"}</b> · percentile <b>${v.pct ?? "—"}</b>${v.hv != null ? ` · 30-day realized ${(v.hv * 100).toFixed(0)}%` : ""}</div>
+    <div class=meta>${few ? `based on ${plural(v.n, "day")} of saved IV so far` : `past-year range ${(v.lo * 100).toFixed(0)}–${(v.hi * 100).toFixed(0)}%`}</div></div>`;
+}
+let volNowCache = null;
+async function loadVolNow() {
+  const el = $("#volNow"); if (!el) return;
+  const v = volNowCache && Date.now() - volNowCache.t < 5 * 60e3 ? volNowCache.v : await api("vol_now");
+  volNowCache = {v, t: Date.now()};
+  const el2 = $("#volNow"); if (!el2) return;
+  if (v.error) { el2.innerHTML = `<div class=meta>${esc(v.error)}</div>`; return; }
+  el2.innerHTML = `<div class=volcharts><div>${miniChart({title: "IV by expiration", sub: "at the money · today", pts: v.term.map(t => ({x: t.dte, y: t.iv * 100, lab: t.label, tip: `${t.label} · ${t.dte} days · IV ${(t.iv * 100).toFixed(1)}%`})), xfmt: x => x + "d", yfmt: y => y.toFixed(0) + "%"})}</div>
+    <div>${miniChart({title: "IV by strike", sub: v.skew_expiry ? `${esc(v.skew_expiry)} (${v.skew_dte} days) · puts below TQQQ, calls above` : "", pts: v.skew.map(s => ({x: s.strike, y: s.iv * 100, color: s.type === "put" ? "var(--warn)" : "var(--up)", tip: `${kTxt(s.strike)} ${s.type} · IV ${(s.iv * 100).toFixed(1)}%`})), xfmt: x => "$" + x, yfmt: y => y.toFixed(0) + "%", vline: v.price, vlab: "TQQQ $" + f2(v.price)})}</div></div>
+    <div class=meta style="margin-top:4px">Upward-sloping IV by expiration is normal; when near-term IV is above longer-term IV, the market expects a bumpy few weeks. Puts usually carry more IV than calls the same distance away (the skew).</div>`;
+}
+function miniChart(c) {
+  const W = 430, H = 170, L = 44, R = 12, T = 12, B = 22, p = c.pts;
+  if (p.length < 2) return `<div class=ihead><b>${c.title}</b></div><div class=meta>Not enough quotes yet.</div>`;
+  const xs = p.map(q => q.x), ys = p.map(q => q.y), x0 = Math.min(...xs, c.vline ?? Infinity), x1 = Math.max(...xs, c.vline ?? -Infinity);
+  const yt = niceTicks(Math.min(...ys) - 2, Math.max(...ys) + 2, 4);
+  const X = x => L + (x - x0) / (x1 - x0 || 1) * (W - L - R), Y = y => T + (yt[yt.length - 1] - y) / (yt[yt.length - 1] - yt[0] || 1) * (H - T - B);
+  const xt = niceTicks(x0, x1, 4).filter(x => x >= x0 && x <= x1);
+  return `<div class=ihead><b>${c.title}</b><span class=meta>${c.sub || ""}</span></div><svg viewBox="0 0 ${W} ${H}" width="100%">
+    ${yt.map(y => `<line x1="${L}" x2="${W - R}" y1="${Y(y)}" y2="${Y(y)}" stroke="var(--line)"/><text x="${L - 6}" y="${Y(y) + 4}" fill="var(--dim)" font-size="11" text-anchor="end">${c.yfmt(y)}</text>`).join("")}
+    ${xt.map(x => `<text x="${X(x)}" y="${H - 6}" fill="var(--dim)" font-size="11" text-anchor="middle">${c.xfmt(x)}</text>`).join("")}
+    ${c.vline != null ? `<line x1="${X(c.vline)}" x2="${X(c.vline)}" y1="${T}" y2="${H - B}" stroke="var(--dim)" stroke-dasharray="3 3"/><text x="${X(c.vline) + 4}" y="${T + 10}" fill="var(--dim)" font-size="10.5">${c.vlab}</text>` : ""}
+    <path d="M${p.map(q => `${X(q.x).toFixed(1)},${Y(q.y).toFixed(1)}`).join("L")}" fill="none" stroke="var(--s1)" stroke-width="1.6" opacity=".7"/>
+    ${p.map(q => `<circle cx="${X(q.x).toFixed(1)}" cy="${Y(q.y).toFixed(1)}" r="4" fill="${q.color || "var(--s1)"}" stroke="var(--panel)" stroke-width="1.5" data-tip="${esc(q.tip)}"/>`).join("")}</svg>`;
+}
 async function renderIndicators(refresh) {
   if (!indData || refresh) {
     if (!indData) $("#main").innerHTML = `<div class=meta style="padding:20px 0"><span class=spin>${I("spin")}</span> Getting TQQQ, the VIX and Fear & Greed…</div>`;
@@ -469,7 +507,11 @@ async function renderIndicators(refresh) {
   const d = indData, nw = d.now, n = ui.indN, NN = d.days.length, sel = d.stoch[n] || {k: [], d: null};
   const R = ui.indRanges;
   const startIdx = r => { const cut = isoMinus(RDAYS[r]); const i = d.days.findIndex(x => x >= cut); return i < 0 ? NN : i; };
-  const G = {px: startIdx(R.px), st: startIdx(R.st), mood: startIdx(R.mood)};
+  const G = {px: startIdx(R.px), st: startIdx(R.st), mood: startIdx(R.mood), vol: startIdx(R.vol || "3M")};
+  // your trades as a layer (v1.11.0): diamonds on the price chart, faint lines on the others
+  const TCOL = {open: "var(--accent)", close: "var(--dim)", assign: "var(--warn)", expire: "var(--up)"};
+  const tradeMarks = (g, diamond) => !ui.indTrades ? [] : d.days.map((day, i) => [day, i]).filter(([day, i]) => i >= G[g] && d.trades[day])
+    .map(([day, i]) => { const ks = d.trades[day].map(t => t.kind); const k = ["assign", "open", "close", "expire"].find(x => ks.includes(x)); return {i: i - G[g], color: TCOL[k], diamond}; });
   const cnt = g => NN - G[g], sl = (a, g) => a ? a.slice(G[g]) : null;
   const names = {tqqq: "TQQQ prices (Yahoo)", vix: "the VIX (Yahoo)", fg: "Fear & Greed (CNN)"};
   const alerts = Object.entries(d.status).filter(([, s]) => !s.ok).map(([k, s]) => `<div class="alert w"><span class=ic>${I("warn")}</span><span><b>Couldn't get ${names[k]}:</b> ${esc(s.error || "no data")}. ${s.at ? `Showing what was fetched ${esc(s.at_txt)}.` : "It'll show here once it's available."}${k === "fg" ? " CNN has no official feed, so its site changing can break this." : ""}</span></div>`).join("");
@@ -480,21 +522,37 @@ async function renderIndicators(refresh) {
   const cards = `<div class="cards itiles" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
     <div class=card><small>TQQQ</small><span class=big>${nw.price == null ? "—" : "$" + f2(nw.price)}</span><div class=meta>${chg(nw.price, nw.prev)} vs. prior day · bars through ${nw.bars_through ? esc(fmtDay(nw.bars_through)) : "—"}</div></div>
     <div class="card stile"><small>Stochastic (%K${nw.stoch["14"] && nw.stoch["14"].d != null ? " / %D" : ""})</small><table class="mini istoch"><tbody>${srows}</tbody></table></div>
+    ${ivTile(d.ivnow)}
     <div class=card><div class=thead>VIX = ${nw.vix == null ? "—" : f2(nw.vix)}</div><div class=meta>${chg(nw.vix, nw.vix_prev)} vs. prior close${nw.vix_lo != null ? ` · 1-year range ${f2(nw.vix_lo)}–${f2(nw.vix_hi)}` : ""}</div></div>
     <div class=card ${tint ? `style="background:${tint.bg};border-color:${tint.bd}"` : ""}><div class=thead>Fear &amp; Greed ${fg.score == null ? "unavailable" : `is at ${Math.round(fg.score)} <span class=pill>${esc(fg.rating || fgName(fg.score))}</span>`}</div>
       <div class=meta>${[["prior close", fg.previous_close], ["1 week", fg.week_ago], ["1 month", fg.month_ago], ["1 year", fg.year_ago]].filter(x => x[1] != null).map(([a, v]) => `${a} ${Math.round(v)}`).join(" · ")}</div></div></div>`;
   const seg = (items, cur, attr) => `<span class=seg>${items.map(([v, t]) => `<button class="btn small ${v === cur ? "on" : ""}" ${attr}="${v}">${t}</button>`).join("")}</span>`;
   const rseg = g => `<span class="seg irng">${RANGES.map(r => `<button class="btn small ${R[g] === r ? "on" : ""}" data-rg="${g}:${r}">${r}</button>`).join("")}</span>`;
   const stochTabs = `<div class=stabs role=tablist>${d.lookbacks.map(String).map(k => `<button role=tab class="${k === n ? "on" : ""}" data-in="${k}">${label(k)}</button>`).join("")}<span class=srng>${rseg(ui.indTable ? "px" : "st")}</span></div>`;
+  const nTr = Object.keys(d.trades || {}).length;
   const bar = `<div class=bar style="margin-bottom:10px;justify-content:flex-end">
+    <span class=meta data-tip="Your trades this run, drawn on the charts: ◆ on the price chart, a faint line on the others (blue opened, gray closed, amber assigned or called away, green expired worthless). Hover a day to see them.">Your trades</span>${seg([["0", "Off"], ["1", "On"]], ui.indTrades ? "1" : "0", "data-itr")}
     ${seg([["chart", "Chart"], ["table", "Table"]], ui.indTable ? "table" : "chart", "data-iv")}
     <button class="btn small" id=indRef>${I("refresh")} Refresh</button></div>`;
+  const pctv = a => a ? a.map(x => x == null ? null : x * 100) : a;
+  const volGroup = () => {
+    const iv = pctv(sl(d.iv, "vol")), hv = pctv(sl(d.hv, "vol")), vals = [...iv, ...hv].filter(x => x != null);
+    const ivn = iv.filter(x => x != null).length;
+    const lo = vals.length ? Math.min(...vals) : 30, hi = vals.length ? Math.max(...vals) : 100, pd = Math.max((hi - lo) * .1, 3);
+    const tk = niceTicks(Math.max(0, lo - pd), hi + pd, 4);
+    const leg = `<span class=ileg><svg width=22 height=8><line x1=0 x2=22 y1=4 y2=4 stroke="var(--s1)" stroke-width=2 /></svg>Implied <svg width=22 height=8><line x1=0 x2=22 y1=4 y2=4 stroke="var(--s2)" stroke-width=2 stroke-dasharray="5 4"/></svg>Realized</span>`;
+    return `<div class="card igroup" style="margin-top:12px"><div class="gtitle gflex">Volatility${rseg("vol")}</div>
+      ${ichart({g: "vol", title: "Implied vs. realized", legend: leg, sub: "TQQQ 30-day at-the-money IV (saved daily since v1.9.0) · realized = last 30 trading days, annualized", h: 170, lo: tk[0], hi: tk[tk.length - 1], ticks: tk, tfmt: t => t + "%", efmt: v => v.toFixed(0) + "%",
+        series: [{v: iv, color: "var(--s1)", name: "IV"}, {v: hv, color: "var(--s2)", dash: true, name: "real."}], marks: tradeMarks("vol")}, cnt("vol"), sl(d.days, "vol"))}
+      ${ivn < 20 ? `<div class=meta style="margin:-2px 0 6px">The implied line is still short: Ghost Trader has saved ${plural(ivn, "day")} of IV in this range so far (one a day from v1.9.0 on).</div>` : ""}
+      <div class=volnow id=volNow><div class=meta style="padding:10px 0"><span class=spin>${I("spin")}</span> Reading IV across expirations and strikes…</div></div></div>`;
+  };
   let body;
   if (!NN) body = `<div class=empty>No TQQQ price history yet.</div>`;
   else if (ui.indTable) {
     const i0 = G.px;
-    const rows = d.days.slice(i0).map((day, j) => { const i = i0 + j; return `<tr><td class=l>${esc(fmtDay(day))}</td><td>${f2(d.close[i])}</td><td>${r0(sel.k[i])}</td>${sel.d ? `<td>${r0(sel.d[i])}</td>` : ""}<td>${d.vix[i] == null ? "—" : f2(d.vix[i])}</td><td>${r0(d.fg[i])}</td><td class="l meta">${d.fg[i] == null ? "" : fgName(d.fg[i])}</td></tr>`; }).reverse().join("");
-    body = `<div class="stochpanel tblmode" style="margin-top:12px">${stochTabs}</div><div class=meta style="margin:6px 2px">The tabs pick the stochastic column; the range picks the dates.</div><div class=chainbox style="max-height:60vh"><table class=both><thead><tr><th class=l>Date</th><th>TQQQ close</th><th>Stoch ${label(n)} %K</th>${sel.d ? "<th>%D</th>" : ""}<th>VIX</th><th>Fear &amp; Greed</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    const rows = d.days.slice(i0).map((day, j) => { const i = i0 + j; return `<tr><td class=l>${esc(fmtDay(day))}</td><td>${f2(d.close[i])}</td><td>${r0(sel.k[i])}</td>${sel.d ? `<td>${r0(sel.d[i])}</td>` : ""}<td>${d.vix[i] == null ? "—" : f2(d.vix[i])}</td><td>${r0(d.fg[i])}</td><td class="l meta">${d.fg[i] == null ? "" : fgName(d.fg[i])}</td><td>${d.iv[i] == null ? "—" : (d.iv[i] * 100).toFixed(0) + "%"}</td><td>${d.hv[i] == null ? "—" : (d.hv[i] * 100).toFixed(0) + "%"}</td>${ui.indTrades ? `<td class="l meta">${(d.trades[day] || []).map(t => esc(t.text)).join("<br>")}</td>` : ""}</tr>`; }).reverse().join("");
+    body = `<div class="stochpanel tblmode" style="margin-top:12px">${stochTabs}</div><div class=meta style="margin:6px 2px">The tabs pick the stochastic column; the range picks the dates.</div><div class=chainbox style="max-height:60vh"><table class=both><thead><tr><th class=l>Date</th><th>TQQQ close</th><th>Stoch ${label(n)} %K</th>${sel.d ? "<th>%D</th>" : ""}<th>VIX</th><th>Fear &amp; Greed</th><th></th><th>IV</th><th>Realized</th>${ui.indTrades ? "<th class=l>Your trades</th>" : ""}</tr></thead><tbody>${rows}</tbody></table></div>`;
   } else {
     const cl = sl(d.close, "px").filter(x => x != null), clo = Math.min(...cl), chi = Math.max(...cl), cp = Math.max((chi - clo) * .06, .3);
     const vx = sl(d.vix, "mood").filter(x => x != null), vlo = vx.length ? Math.min(...vx) : 10, vhi = vx.length ? Math.max(...vx) : 30, vp = Math.max((vhi - vlo) * .08, .5);
@@ -503,12 +561,13 @@ async function renderIndicators(refresh) {
     const sk = sl(sel.k, "st"), sd = sl(sel.d, "st");
     body = `<div class=ichartbox id=ichartbox style="position:relative;margin-top:12px">
       <div class="card igroup"><div class=gtitle>TQQQ</div>
-      ${ichart({g: "px", title: "Price", ctl: rseg("px"), sub: "daily close", h: 190, lo: ct[0], hi: ct[ct.length - 1], ticks: ct, tfmt: t => "$" + t, efmt: v => "$" + v.toFixed(2), series: [{v: sl(d.close, "px"), color: "var(--s1)"}]}, cnt("px"), sl(d.days, "px"))}
+      ${ichart({g: "px", title: "Price", ctl: rseg("px"), sub: "daily close", h: 190, lo: ct[0], hi: ct[ct.length - 1], ticks: ct, tfmt: t => "$" + t, efmt: v => "$" + v.toFixed(2), series: [{v: sl(d.close, "px"), color: "var(--s1)"}], marks: tradeMarks("px", true)}, cnt("px"), sl(d.days, "px"))}
       <div class=stochpanel>${stochTabs}
-      ${ichart({g: "st", title: "Stochastic", legend: leg, sub: sel.d ? "%K smoothed 3 · %D = 3-day average of %K · 80 / 20 lines" : `raw %K over ${n} trading days · 80 / 20 lines`, h: 170, lo: 0, hi: 100, ticks: [0, 20, 50, 80, 100], refs: [{y: 80}, {y: 20}], efmt: v => Math.round(v), series: sel.d ? [{v: sk, color: "var(--s1)", name: "%K"}, {v: sd, color: "var(--s2)", dash: true, name: "%D"}] : [{v: sk, color: "var(--s1)"}]}, cnt("st"), sl(d.days, "st"))}</div></div>
+      ${ichart({g: "st", title: "Stochastic", legend: leg, sub: sel.d ? "%K smoothed 3 · %D = 3-day average of %K · 80 / 20 lines" : `raw %K over ${n} trading days · 80 / 20 lines`, h: 170, lo: 0, hi: 100, ticks: [0, 20, 50, 80, 100], refs: [{y: 80}, {y: 20}], efmt: v => Math.round(v), series: sel.d ? [{v: sk, color: "var(--s1)", name: "%K"}, {v: sd, color: "var(--s2)", dash: true, name: "%D"}] : [{v: sk, color: "var(--s1)"}], marks: tradeMarks("st")}, cnt("st"), sl(d.days, "st"))}</div></div>
       <div class="card igroup" style="margin-top:12px"><div class="gtitle gflex">Market mood${rseg("mood")}</div>
-      ${ichart({g: "mood", title: "VIX", sub: "S&P 500 expected volatility, daily close", h: 150, lo: vt[0], hi: vt[vt.length - 1], ticks: vt, efmt: v => v.toFixed(2), series: [{v: sl(d.vix, "mood"), color: "var(--s1)"}]}, cnt("mood"))}
-      ${ichart({g: "mood", title: "Fear & Greed", sub: "CNN, 0–100", h: 170, lo: 0, hi: 100, ticks: [0, 25, 45, 55, 75, 100], bands: FG_BANDS, series: [{v: sl(d.fg, "mood"), color: "var(--s1)"}]}, cnt("mood"), sl(d.days, "mood"))}</div>
+      ${ichart({g: "mood", title: "VIX", sub: "S&P 500 expected volatility, daily close", h: 150, lo: vt[0], hi: vt[vt.length - 1], ticks: vt, efmt: v => v.toFixed(2), series: [{v: sl(d.vix, "mood"), color: "var(--s1)"}], marks: tradeMarks("mood")}, cnt("mood"))}
+      ${ichart({g: "mood", title: "Fear & Greed", sub: "CNN, 0–100", h: 170, lo: 0, hi: 100, ticks: [0, 25, 45, 55, 75, 100], bands: FG_BANDS, series: [{v: sl(d.fg, "mood"), color: "var(--s1)"}], marks: tradeMarks("mood")}, cnt("mood"), sl(d.days, "mood"))}</div>
+      ${volGroup()}
       <div class=itip id=itip></div></div>`;
   }
   $("#main").innerHTML = `${alerts}${bar}${cards}${body}
@@ -517,6 +576,8 @@ async function renderIndicators(refresh) {
   $$("[data-rg]").forEach(b => b.onclick = () => { const [g, r] = b.dataset.rg.split(":"); ui.indRanges = {...ui.indRanges, [g]: r};
     api("settings_set", {ind_ranges: {[g]: r}}); renderIndicators(); });
   $$("[data-iv]").forEach(b => b.onclick = () => { ui.indTable = b.dataset.iv === "table"; renderIndicators(); });
+  $$("[data-itr]").forEach(b => b.onclick = () => { ui.indTrades = b.dataset.itr === "1"; api("settings_set", {ind_trades: ui.indTrades}); renderIndicators(); });
+  if ($("#volNow")) loadVolNow();
   $("#indRef").onclick = async () => { $("#indRef").innerHTML = `<span class=spin>${I("spin")}</span> Refreshing…`; await renderIndicators(true); };
   const box = $("#ichartbox"); if (!box) return;
   const tip = $("#itip");
@@ -538,6 +599,8 @@ async function renderIndicators(refresh) {
       <div class=row><span class=meta>Stoch ${label(n)}</span><span>${r0(sel.k[gi])}${sel.d ? " / " + r0(sel.d[gi]) : ""}</span></div>
       <div class=row><span class=meta>VIX</span><span>${d.vix[gi] == null ? "—" : f2(d.vix[gi])}</span></div>
       <div class=row><span class=meta>Fear &amp; Greed</span><span>${d.fg[gi] == null ? "—" : Math.round(d.fg[gi]) + " · " + fgName(d.fg[gi])}</span></div>
+      ${d.iv[gi] != null || d.hv[gi] != null ? `<div class=row><span class=meta>IV / realized</span><span>${d.iv[gi] == null ? "—" : (d.iv[gi] * 100).toFixed(0) + "%"} / ${d.hv[gi] == null ? "—" : (d.hv[gi] * 100).toFixed(0) + "%"}</span></div>` : ""}
+      ${ui.indTrades && d.trades[d.days[gi]] ? `<div class=itrades>${d.trades[d.days[gi]].map(t => `<div><span style="color:${TCOL[t.kind]}">◆</span> ${esc(t.text)}</div>`).join("")}</div>` : ""}
       <div class="meta ifoot">${pinned ? "PINNED · " : "CLICK TO PIN · "}DOUBLE-CLICK: HISTORY FOR THIS DAY</div>`;
     tip.style.display = "block"; tip.classList.toggle("pinned", !!pinned);
     const ref = from || svgs().find(sv => { const li = gi - G[sv.dataset.g]; return li >= 0 && li < cnt(sv.dataset.g); }) || svgs()[0];
@@ -1210,7 +1273,7 @@ function paintSplash(s) {
 }
 async function startup() {
   boot = await api("boot");
-  ui.theme = boot.theme || "system"; applyTheme(); ui.autoMin = boot.auto_refresh ?? 10; setAutoRefresh(); if (boot.ind_ranges) ui.indRanges = {...ui.indRanges, ...boot.ind_ranges}; ui.outRange = boot.out_range || "3M";
+  ui.theme = boot.theme || "system"; applyTheme(); ui.autoMin = boot.auto_refresh ?? 10; setAutoRefresh(); if (boot.ind_ranges) ui.indRanges = {...ui.indRanges, ...boot.ind_ranges}; ui.indTrades = !!boot.ind_trades; ui.outRange = boot.out_range || "3M";
   if (boot.demo) { const d = document.createElement("div"); d.className = "demo"; d.textContent = "Demo mode · synthetic data · separate demo ledger"; document.body.appendChild(d); }
   await api("loaded");
   setInterval(async () => { const h = await api("heartbeat"); if (h.restarting) $("#splash").innerHTML = `<div class=splash><div class=modal><h3>${LOGO} Restarting…</h3><div class=meta>Ghost Trader is restarting. If this is a browser tab, you can close it.</div></div></div>`; }, 5000);

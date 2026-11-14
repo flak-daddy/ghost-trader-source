@@ -25,7 +25,7 @@ def ready(home):
 def test_ranges_saved_and_validated(home):
     a = ready(home)
     a.api_settings_set(ind_ranges={"st": "1M", "px": "bogus", "nope": "5Y"})
-    assert a.settings.get("ind_ranges") == {"px": "3M", "st": "1M", "mood": "3M"}
+    assert a.settings.get("ind_ranges") == {"px": "3M", "st": "1M", "mood": "3M", "vol": "3M"}
     assert a.api_settings_set(out_range="2Y")["error"]
     a.api_settings_set(out_range="1Y")
     b = a.api_boot()

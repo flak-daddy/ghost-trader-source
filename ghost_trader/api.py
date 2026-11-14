@@ -93,6 +93,7 @@ class App:
         return {"version": __version__, "demo": self.demo, "theme": self.settings.get("theme"),
                 "auto_refresh": self.settings.get("auto_refresh"),
                 "ind_ranges": self.settings.get("ind_ranges"), "out_range": self.settings.get("out_range"),
+                "ind_trades": bool(self.settings.get("ind_trades")),
                 "provider": self.provider.name, "symbol": SYMBOL}
 
     def api_loaded(self):
@@ -532,11 +533,89 @@ class App:
                 self.ind.refresh()
         v = self.ind.view(months)
         v["range"] = "5Y"
+        v.update(self._vol_series(v["days"], v["close"]))
+        v["trades"] = self._trade_days(v["days"][0] if v["days"] else None)
         for st in v["status"].values():
             if st["at"]:
                 st["at_txt"] = timeutil.fmt_ct(st["at"], with_date=True)
         v["market"] = self._market()
         return v
+
+    # ------------------------------------------------------------------ volatility (v1.11.0)
+    def _vol_series(self, days, closes):
+        """IV history (TQQQ 30-day ATM, saved daily since v1.9.0) and 30-day realized volatility, lined up with the
+        Indicators days, plus today's IV with its rank and percentile over the past year of readings."""
+        hist = dict(ivhist.history(self.db))
+        iv = [hist.get(d) for d in days]
+        hv = [None] * len(days)
+        rets = [math.log(closes[i] / closes[i - 1]) if closes[i] and closes[i - 1] else None for i in range(1, len(closes))]
+        for i in range(30, len(closes)):
+            w = [x for x in rets[i - 30:i] if x is not None]
+            if len(w) >= 20:
+                m = sum(w) / len(w)
+                hv[i] = round(math.sqrt(sum((x - m) ** 2 for x in w) / (len(w) - 1)) * math.sqrt(252), 4)
+        now = None
+        if hist:
+            last_day = max(hist)
+            year = [v for d, v in hist.items() if d > (dt.date.fromisoformat(last_day) - dt.timedelta(days=365)).isoformat()]
+            cur = hist[last_day]
+            lo, hi = min(year), max(year)
+            now = {"iv": cur, "day": last_day, "n": len(year), "lo": lo, "hi": hi,
+                   "rank": round((cur - lo) / (hi - lo) * 100) if hi > lo else None,
+                   "pct": round(sum(1 for v in year if v < cur) / len(year) * 100) if len(year) > 1 else None,
+                   "hv": next((x for x in reversed(hv) if x is not None), None)}
+        return {"iv": iv, "hv": hv, "ivnow": now}
+
+    def _trade_days(self, since=None):
+        """This run's trades, assignments and expirations by day (CT), for the Indicators trade layer."""
+        r = self.led.run()
+        if not r:
+            return {}
+        out = {}
+        kinds = {"Trade": "trade", "Shares": "trade", "Assigned": "assign", "Called away": "assign", "Expired": "expire",
+                 "Exercised": "assign"}
+        for e in self.db.q("SELECT ts, kind, title FROM events WHERE run_id=? AND kind IN (%s) ORDER BY ts" %
+                           ",".join("?" * len(kinds)), (r["id"], *kinds)):
+            day = timeutil.parse(e[0]).astimezone(timeutil.CT).date().isoformat()
+            if since and day < since:
+                continue
+            k = kinds[e[1]]
+            if k == "trade":
+                k = "open" if e[2].lower().startswith(("sell to open", "buy to open", "buy ")) else "close"
+            out.setdefault(day, []).append({"kind": k, "text": e[2]})
+        return out
+
+    def api_vol_now(self):
+        """IV by expiration (term structure) and IV by strike for the expiration nearest 30 days (skew), from the
+        chains. Fetches chains not already cached, so the tab asks for this after it has drawn."""
+        S = self.price()
+        if not S:
+            return {"error": "No TQQQ price yet."}
+        today = timeutil.today_ct()
+        term, rows30, best = [], None, None
+        try:
+            exps = [e for e in self.quotes.expirations() if 2 <= (dt.date.fromisoformat(e) - today).days <= 130][:12]
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"No expirations: {e}"}
+        for e in exps:
+            try:
+                c = self.quotes.chain(e)
+            except Exception:  # noqa: BLE001
+                continue
+            dte = (dt.date.fromisoformat(e) - today).days
+            v = ivhist.atm_iv(c["rows"], S)
+            if v:
+                term.append({"expiry": e, "label": timeutil.fmt_exp(dt.date.fromisoformat(e)), "dte": dte, "iv": round(v, 4)})
+            if best is None or abs(dte - 30) < abs(best - 30):
+                best, rows30, exp30 = dte, c["rows"], e
+        skew = []
+        if rows30:
+            for x in sorted(rows30, key=lambda r: r["strike"]):
+                otm = (x["type"] == "put" and x["strike"] < S) or (x["type"] == "call" and x["strike"] >= S)
+                if otm and x.get("iv") and 0.6 * S <= x["strike"] <= 1.4 * S and (x.get("bid") or 0) > 0:
+                    skew.append({"strike": x["strike"], "iv": round(x["iv"], 4), "type": x["type"]})
+        return {"price": S, "term": term, "skew": skew,
+                "skew_expiry": rows30 and timeutil.fmt_exp(dt.date.fromisoformat(exp30)), "skew_dte": best}
 
     # ------------------------------------------------------------------ position panel
     def api_position(self, id):
@@ -883,15 +962,17 @@ class App:
         if "ind_ranges" in kw:
             cur = dict(self.settings.get("ind_ranges") or {})
             for g, v in (kw["ind_ranges"] or {}).items():
-                if g in ("px", "st", "mood") and v in RANGES:
+                if g in ("px", "st", "mood", "vol") and v in RANGES:
                     cur[g] = v
             kw["ind_ranges"] = cur
         if "out_range" in kw and kw["out_range"] not in RANGES:
             return {"error": "Unknown range."}
         if "eod_summary" in kw:
             kw["eod_summary"] = bool(kw["eod_summary"])
+        if "ind_trades" in kw:
+            kw["ind_trades"] = bool(kw["ind_trades"])
         self.settings.update(**kw)
-        changed = [k for k in kw if old.get(k) != self.settings.get(k) and k not in ("chain_exp", "chain_view", "theme", "ind_ranges", "out_range")]
+        changed = [k for k in kw if old.get(k) != self.settings.get(k) and k not in ("chain_exp", "chain_view", "theme", "ind_ranges", "out_range", "ind_trades")]
         if changed and self.led.run():
             nice = {"av_key": "Alpha Vantage key", "manual_rate": "manual rate", "haircut": "haircut",
                     "long_options": "buying options to open"}
