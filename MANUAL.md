@@ -448,6 +448,7 @@ The main screen. From top to bottom:
 - **Cards:** account value and return, Available, Collateral, Shares, premium collected this run, and interest earned (with the next pay date).
 - **Open options:** each position with contracts, the price you sold at, the current mark, collateral or shares covering, distance from the strike (and whether it's ITM or OTM), days to expiration (DTE), and P&L. Double-click a contract to open it in the Chain with its details panel. **Close** opens a buy-to-close ticket.
 - **Shares:** your lots, average cost, value and P&L, how many shares are covering calls and how many are free. **Buy shares…** opens a share ticket.
+- **Wheel cycles (v1.13.0):** every trip around the wheel that's still going (see *Wheel cycles* below), with a quick summary: open cycles, success rate, profit on finished cycles and full wheels, plus a link to the finished ones on Performance.
 - **Where TQQQ could go:** TQQQ's last few months, then a shaded cone from today out to your latest expiration. The inner band (the brighter one in dark mode, the deeper one in light mode) is where TQQQ would end up about 68% of the time if it moves as its implied volatility says; the outer band, inner included, about 95%. Each open option is drawn as its strike, from today to its expiration (puts in amber, calls in green). Hover the past for a close. Hover the future and a box says what the cone means for that date: in the inner band, "about 68% chance TQQQ closes between $a and $b at the close on Fri, Dec 4"; in the outer band, the 95% range (and the 14% on that side); outside the cone, the chance it closes beyond the edge; on one of your strike lines, the chance TQQQ closes below a put's strike (or above a call's) on that date. The date snaps to the nearest weekday. The cone uses TQQQ's 30-day at-the-money IV (saved daily since v1.9.0). It says how far TQQQ might move, not which way.
 - A link to the **calendar**, which moved to the Market tab in v1.12.0.
 
@@ -641,6 +642,23 @@ Each chart can be switched to a table view.
 - **Average result.** Assigned puts count the shares at the closing price on the day they were assigned, so a loss on the shares isn't hidden behind the premium.
 
 With only a few trades in a group, the numbers say very little.
+
+### Wheel cycles (v1.13.0)
+
+A **cycle** is one trip around the wheel, followed from start to finish:
+
+1. It starts when you **sell a put**.
+2. If the put **expires worthless** or you **close it**, the cycle is over.
+3. If you're **assigned**, the cycle follows the shares: every **covered call** you sell on them belongs to it.
+4. It ends when the shares are **called away or sold**. That's a **full wheel**.
+
+A cycle's **profit** is the premium from the put and its calls (net of anything you paid to buy back), plus the gain or loss on the shares: what they left at, against the price you were assigned at. While shares are still held, the gain or loss uses today's price. **Interest on the collateral isn't counted**, and shares you bought outright aren't part of any cycle. If you close or roll a put early, that put's cycle ends there and the next put starts a new one.
+
+- **Portfolio** lists the cycles still going: the stage (short put, holding shares, covered call), the premium so far, your shares and **breakeven** (what you paid, less the premium per share), and the net so far. Hover a row for its steps, day by day.
+- **Performance** (below the outcomes table) lists the **finished cycles**: how each ended, days, premium, shares, profit, and **return on collateral** (profit divided by the put's collateral; hover for the annualized figure), with the same summary.
+- **Success rate** is the share of finished cycles that made money.
+
+**Stats** (Performance, under the wheel cycles): **max drawdown** (the biggest fall in account value from a high, over the run's daily values) and **days to recover** (from that low back to the earlier high; "not yet" if it hasn't), **option win rate** (finished short options that made money), **average days held**, **average % of premium kept**, and **premium per $1,000 of collateral** on puts. These fill in as options finish.
 
 ### Settings
 

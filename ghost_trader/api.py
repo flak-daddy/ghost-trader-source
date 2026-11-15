@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import SYMBOL, __version__, alerts, config, csvout, db as dbm, events, indicators, ivhist, manual, marketcal, notify, perf, timeutil
+from . import SYMBOL, __version__, alerts, config, csvout, db as dbm, events, indicators, ivhist, manual, marketcal, notify, perf, timeutil, wheel
 from .ledger import Ledger, TradeError, cents, money, strike_txt
 from .market import DemoProvider, Quotes, Rates, YahooProvider, ncdf
 from .startup import Startup
@@ -1091,6 +1091,13 @@ class App:
             m["label"] = dt.date(y, mo, 1).strftime("%b %Y")
         p["next_pay"] = timeutil.fmt_exp(marketcal.next_pay_date(timeutil.today_ct() - dt.timedelta(days=1)))
         return p
+
+    def api_wheel(self):
+        """Wheel cycles (v1.13.0): open ones for Portfolio, closed ones for Performance, plus the quick summary and
+        the performance stats."""
+        cs = wheel.cycles(self.led, self.price())
+        return {"open": [c for c in cs if c["open"]], "closed": [c for c in reversed(cs) if not c["open"]],
+                "summary": wheel.summary(cs), "stats": wheel.stats(self.led)}
 
     # ------------------------------------------------------------------ settings & tags
     def api_settings(self):

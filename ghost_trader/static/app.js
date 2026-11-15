@@ -196,9 +196,60 @@ async function renderPortfolio() {
     <div class=meta>Account value = cash + collateral + shares · interest counts once it's paid on the 15th · option buy-back prices not counted</div>
     <h2>Open options</h2><table><thead><tr><th class=l>Contract</th><th>Contracts</th><th>${st.positions.some(p => p.side === "long") ? "Opened at" : "Sold at"}</th><th>Mark</th><th>Collateral / cover</th><th>Distance</th><th>DTE</th><th>P&L</th><th>% of premium</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     <h2 id=sharesH style="display:flex;justify-content:space-between;align-items:center">Shares <button class="btn small" onclick="openShares('buy_shares')">Buy shares…</button></h2><table><thead><tr><th class=l>Holding</th><th>Qty</th><th>Avg cost</th><th>Price</th><th>Value</th><th>P&L</th><th>%</th><th></th></tr></thead><tbody>${shRow}</tbody></table>
+    <h2>Wheel cycles</h2><div id=pfWheel><span class=meta><span class=spin>${I("spin")}</span> Working out your cycles…</span></div>
     <h2>Where TQQQ could go</h2><div id=pfCone class=card style="padding:12px 14px"><span class=meta><span class=spin>${I("spin")}</span> Drawing…</span></div>
     <div class=meta style="margin-top:10px">The calendar is on the <span class="lnk helplink" style="margin:0" onclick="ui.tab='Market';render()">Market</span> tab.</div>`;
   api("cone", {days_back: 90}).then(d => drawCone($("#pfCone"), d, false));
+  api("wheel").then(w => renderWheelPf(w));
+}
+
+/* ---------- WHEEL CYCLES (v1.13.0) ---------- */
+const wmoney = (c, sign) => `<span class="${c > 0 ? "up" : c < 0 ? "down" : ""}">${mc(c, sign)}</span>`;
+const wsteps = c => c.steps.map(s => `${s.when}: ${s.text}${s.c ? " (" + (s.c > 0 ? "+" : "−") + "$" + Math.abs(s.c / 100).toFixed(2) + ")" : ""}`).join("\n");
+function wheelSummary(sm, where) {
+  const pc = v => v == null ? "—" : Math.round(v * 100) + "%";
+  return `<div class=cards style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
+    <div class=card data-tip="Cycles still going: a put you hold, or shares you were assigned that haven't been called away or sold yet."><small>Open cycles</small><span class=big>${sm.open}</span><div class=meta>${sm.open ? mc(sm.open_pnl_c, true) + " so far" : "none"}</div></div>
+    <div class=card data-tip="Finished cycles that made money (put expired worthless, or the whole put-to-shares trip ended above zero), out of all finished cycles."><small>Success rate</small><span class=big>${pc(sm.win_rate)}</span><div class=meta>${sm.closed ? sm.wins + " of " + plural(sm.closed, "finished cycle") : "no finished cycles yet"}</div></div>
+    <div class=card><small>Profit, finished cycles</small><span class="big ${sm.pnl_c >= 0 ? "up" : "down"}">${sm.closed ? mc(sm.pnl_c, true) : "—"}</span><div class=meta>${sm.closed ? mc(sm.avg_c, true) + " average · " + sm.avg_days.toFixed(0) + " days" : ""}</div></div>
+    <div class=card data-tip="Cycles that went all the way around: put assigned, shares later called away or sold."><small>Full wheels</small><span class=big>${sm.wheels}</span><div class=meta>${where || ""}</div></div></div>`;
+}
+function renderWheelPf(w) {
+  const el = $("#pfWheel"); if (!el) return;
+  if (!w || w.error) { el.innerHTML = ""; return; }
+  const sm = w.summary;
+  if (!sm.open && !sm.closed) { el.innerHTML = `<div class="card empty" style="padding:14px">No wheel cycles yet. A cycle starts when you sell a put; it follows the put through assignment, the covered calls you sell on those shares, and the shares being called away.</div>`; return; }
+  const link = `<span class=lnk style="color:var(--accent)" onclick="ui.perfTo='wheelClosed';go('perf')">Closed cycles on Performance →</span>`;
+  const rows = w.open.map(c => `<tr data-tip="${esc(wsteps(c))}"><td class=l>${c.qty} × ${esc(c.label)}<div class=meta>started ${esc(c.start_txt)} · ${plural(c.days, "day")}</div></td>
+    <td class=l><span class=pill>${esc(c.stage)}</span>${c.calls ? `<div class=meta>${plural(c.calls, "call")} sold${c.open_calls ? ", 1 open" : ""}</div>` : ""}</td>
+    <td>${wmoney(c.put_c + c.call_c, true)}</td>
+    <td>${c.shares ? c.shares + " @ " + f2(c.cost) + `<div class=meta>breakeven ${f2(c.breakeven)}</div>` : "—"}</td>
+    <td>${c.shares && c.unreal_c != null ? wmoney(c.unreal_c, true) : "—"}</td>
+    <td>${wmoney(c.pnl_c, true)}</td></tr>`).join("");
+  el.innerHTML = `${wheelSummary(sm, link)}
+    ${sm.open ? `<table style="margin-top:10px"><thead><tr><th class=l>Open cycle</th><th class=l>Stage</th><th data-tip="Premium from the put and its calls, net of any buy-backs">Premium so far</th><th>Shares</th><th data-tip="Gain or loss on the shares at today's price versus what you paid">Shares vs. cost</th><th>Net so far</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class=meta style="margin-top:6px">Hover a row for its steps. Net so far = premium (net of buy-backs) + the shares' gain or loss at today's price; interest on the collateral isn't counted.</div>` : `<div class=meta style="margin-top:8px">No cycles open right now.</div>`}`;
+}
+function renderWheelPerf(w) {
+  const el = $("#wheelPerf"); if (!el || !w || w.error) return;
+  const sm = w.summary, st = w.stats || {};
+  const pc = (v, d = 0) => v == null ? "—" : (v * 100).toFixed(d) + "%";
+  const sc = [["Max drawdown", st.max_dd == null ? "—" : "−" + (Math.abs(st.max_dd) * 100).toFixed(1) + "%", "Biggest fall in account value from a high, over this run's daily values."],
+    ["Days to recover", st.max_dd == null ? "—" : st.dd_recover_days != null ? st.dd_recover_days : (st.max_dd < 0 ? "not yet" : "—"), "Days from the low of that worst fall until the account got back to its earlier high."],
+    ["Option win rate", pc(st.win_rate), "Share of finished short options that ended up with a profit (premium kept net of any buy-back)."],
+    ["Avg days held", st.avg_days == null ? "—" : st.avg_days.toFixed(0), "Average time a finished short option was open."],
+    ["Avg % of premium kept", pc(st.avg_kept), "Of the premium you collected, how much you kept on average. Expired worthless = 100%; bought back for more than you sold it for counts below 0%."],
+    ["Premium / $1k collateral", st.per_1k == null ? "—" : "$" + st.per_1k.toFixed(2), "Premium collected on puts for every $1,000 of collateral set aside, before interest and regardless of outcome."]];
+  const stats = `<h2>Stats</h2><div class=cards style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">${sc.map(([a, b, t]) => `<div class=card data-tip="${esc(t)}"><small>${a}</small><span class=big>${b}</span></div>`).join("")}</div>
+    ${st.closed_options ? "" : `<div class=meta>These fill in as options finish.</div>`}`;
+  const rows = w.closed.map(c => `<tr data-tip="${esc(wsteps(c))}"><td class=l>${c.qty} × ${esc(c.label)}<div class=meta>${esc(c.start_txt)} → ${esc(c.end_txt)}</div></td><td class=l>${esc(c.outcome)}${c.calls ? `<div class=meta>${plural(c.calls, "call")} sold</div>` : ""}</td>
+    <td>${c.days}</td><td>${wmoney(c.put_c + c.call_c, true)}</td><td>${c.shares || c.share_c ? wmoney(c.share_c, true) : "—"}</td><td>${wmoney(c.pnl_c, true)}</td>
+    <td data-tip="Profit divided by the put's collateral (${mc(c.collateral_c)}). Annualized: ${pc(c.ann)} if repeated back-to-back">${pc(c.ret, 1)}</td></tr>`).join("");
+  el.innerHTML = `<h2 id=wheelClosed>Wheel cycles</h2>${wheelSummary(sm, "")}
+    ${sm.closed ? `<table style="margin-top:10px"><thead><tr><th class=l>Finished cycle</th><th class=l>How it ended</th><th>Days</th><th data-tip="Premium from the put and its calls, net of buy-backs">Premium</th><th data-tip="Gain or loss on the shares, from the price you were assigned at to the price they left at">Shares</th><th>Profit</th><th>Return on collateral</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class=meta style="margin-top:6px">Each cycle starts when you sell a put. If you close or roll a put early, that put's cycle ends there and the next put starts a new one. Shares you bought outright aren't counted. Interest isn't counted. Hover a row for its steps. Open cycles are on Portfolio.</div>` : `<div class="card empty" style="padding:14px;margin-top:10px">No finished cycles yet. Open ones are on Portfolio.</div>`}
+    ${stats}`;
+  if (ui.perfTo === "wheelClosed") { ui.perfTo = null; setTimeout(() => $("#wheelClosed") && $("#wheelClosed").scrollIntoView({block: "start", behavior: "smooth"}), 60); }
 }
 async function renderCalendar() {
   const c = await api("calendar", {month: ui.calMonth});
@@ -1085,8 +1136,8 @@ async function renderPerf() {
     <div class=card><small>vs. benchmarks</small><span class=big>${sm.bh_ret == null ? "—" : ((sm.ret - sm.bh_ret) * 100 >= 0 ? "+" : "") + ((sm.ret - sm.bh_ret) * 100).toFixed(2)} / ${((sm.ret - sm.tb_ret) * 100 >= 0 ? "+" : "") + ((sm.ret - sm.tb_ret) * 100).toFixed(2)} pts</span><div class=meta>vs. TQQQ / vs. T-bills</div></div></div>`;
   const bars = monthBars(p);
   if (N < 2) {
-    $("#main").innerHTML = `${cardsH}<div style="display:flex;gap:16px;flex-wrap:wrap"><div class=card style="flex:1;min-width:0"><b>Account value</b><div class=empty>The charts fill in as days go by: one point for each day the app is opened (missed days are estimated from TQQQ's daily closes).</div></div>${bars}</div><div id=outcomes></div>`;
-    renderOutcomes();
+    $("#main").innerHTML = `${cardsH}<div style="display:flex;gap:16px;flex-wrap:wrap"><div class=card style="flex:1;min-width:0"><b>Account value</b><div class=empty>The charts fill in as days go by: one point for each day the app is opened (missed days are estimated from TQQQ's daily closes).</div></div>${bars}</div><div id=outcomes></div><div id=wheelPerf></div>`;
+    renderOutcomes(); api("wheel").then(renderWheelPerf);
     return;
   }
   const {acct, bh, tb, tqqq: tq, est} = p;
@@ -1136,8 +1187,8 @@ async function renderPerf() {
       <div style="display:flex;justify-content:space-between"><b>Account value since ${esc(p.labels[0])}</b><span class=seg><button class="btn small ${ui.chartTable ? "" : "on"}" id=asChart>Chart</button><button class="btn small ${ui.chartTable ? "on" : ""}" id=asTable>Table</button></span></div>
       <div class=meta style="margin:2px 0 6px"><span style="color:var(--s1)">${I("dot")}</span> Ghost Trader &nbsp; <span style="color:var(--s2)">${I("dot")}</span> TQQQ buy & hold &nbsp; <span style="color:var(--s3)">${I("dot")}</span> T-bills &nbsp; ${I("ring")} estimated day &nbsp; <span style="color:var(--warn)">${I("diamond")}</span> share in/out</div>
       ${ui.chartTable ? table : `${svg1}<div style="border-top:1px solid var(--line);margin-top:6px;padding-top:8px"><b>TQQQ price since ${esc(p.labels[0])}</b> <span class=meta>· hover either chart · click a <span style="color:var(--warn)">${I("diamond")}</span> to pin, double-click to open in History</span></div><div class=chartwrap>${svg2}${pin}</div>`}</div>
-      ${bars}</div><div id=outcomes></div>`;
-  renderOutcomes();
+      ${bars}</div><div id=outcomes></div><div id=wheelPerf></div>`;
+  renderOutcomes(); api("wheel").then(renderWheelPerf);
   $("#asChart").onclick = () => { ui.chartTable = false; render(); };
   $("#asTable").onclick = () => { ui.chartTable = true; render(); };
   if ($("#clrBand")) $("#clrBand").onclick = () => { ui.perfDay = null; render(); };
