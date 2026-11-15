@@ -230,6 +230,34 @@ def note_reminders(led, now=None):
     return sent
 
 
+def attime_due(led, now=None):
+    """Exact-time reminders (v1.12.4): notes/events with remind='attime' whose day + time (CT) has come and that haven't
+    fired. Sends each as a desktop notification, marks it sent, and returns them for the app's banner. `missed` is
+    true when it's more than 3 minutes late (the app was closed at its time)."""
+    now = now or timeutil.now()
+    ct = now.astimezone(timeutil.CT)
+    try:
+        rows = led.db.q("SELECT * FROM notes WHERE deleted=0 AND remind='attime' AND reminded_at IS NULL AND time IS NOT NULL "
+                        "AND day<=? ORDER BY day, time", (ct.date().isoformat(),))
+    except Exception as e:  # noqa: BLE001 - an older ledger without the notes table
+        log.warning("reminders: %s", e)
+        return []
+    out = []
+    for n in rows:
+        due = dt.datetime.combine(dt.date.fromisoformat(n["day"]), dt.datetime.strptime(n["time"], "%H:%M").time(), tzinfo=timeutil.CT)
+        if due > now:
+            continue
+        late = int((now - due).total_seconds() // 60)
+        missed = late > 3
+        when = f"{timeutil.fmt_date(n['day'])}, {dt.datetime.strptime(n['time'], '%H:%M').strftime('%-I:%M %p')} CT"
+        text = f"{'Missed reminder, due ' + when if missed else 'Reminder'}: {n['title']}"
+        send(f"Ghost Trader · {'reminder' if n['kind'] == 'note' else 'event'}", text + (f"\n{n['body']}" if n["body"] else ""))
+        led.db.x("UPDATE notes SET reminded_at=? WHERE id=?", (timeutil.iso(now), n["id"]))
+        out.append({"id": n["id"], "kind": n["kind"], "title": n["title"], "body": n["body"], "when": when,
+                    "missed": missed, "late_min": late})
+    return out
+
+
 def daily_check(led, quote_price=None, now=None, settings=None, readings=None, rate=None):
     """Called by the timer. Mornings: expiration nudge. From 3 PM CT: end-of-day summary (if on).
     Both times: indicator alerts (if a readings function is given). Returns what it did, for logging."""

@@ -234,18 +234,20 @@ function noteEditor(n) {
   $("#overlay").innerHTML = `<div class=scrim><div class=modal style="width:480px"><h3>${isNew ? "Add to" : "Edit"} ${esc(dayTxt)}</h3>
     <div class=row><label>Type</label><span class=seg><button class="btn small ${n.kind === "note" ? "on" : ""}" data-nk=note>Note</button><button class="btn small ${n.kind === "event" ? "on" : ""}" data-nk=event>Event</button></span></div>
     <div class=row><label id=ntLab>${n.kind === "note" ? "Note" : "Title"}</label><input id=ntTitle value="${esc(n.title || "")}" style="width:300px" placeholder="${n.kind === "note" ? "e.g. watch NVDA after the close" : "e.g. Review my Dec puts"}"></div>
-    <div class=row id=ntTimeRow style="${n.kind === "event" ? "" : "display:none"}"><label>Time (CT, optional)</label><input id=ntTime value="${esc(n.time_txt || "")}" style="width:110px" placeholder="2:30 PM"></div>
+    <div class=row id=ntTimeRow style="${n.kind === "event" || n.remind === "attime" ? "" : "display:none"}"><label>Time (CT${n.remind === "attime" ? "" : ", optional"})</label><input id=ntTime value="${esc(n.time_txt || "")}" style="width:110px" placeholder="2:30 PM"></div>
     <div class=row style="align-items:flex-start"><label>Details (optional)</label><textarea id=ntBody rows=3 style="width:300px">${esc(n.body || "")}</textarea></div>
-    <div class=row><label>Reminder</label><select id=ntRem>${[["none", "None"], ["morning", "That morning (7:45 AM CT)"], ["daybefore", "The afternoon before (3:30 PM CT)"]].map(([v, t]) => `<option value="${v}" ${n.remind === v ? "selected" : ""}>${t}</option>`).join("")}</select></div>
-    <div class=meta>Reminders are desktop notifications from Ghost Trader's timer, which also runs when the app is closed. Notes and events are logged in History and the run CSV.</div>
+    <div class=row><label>Reminder</label><select id=ntRem>${[["none", "None"], ["attime", "At its time (needs a time)"], ["morning", "That morning (7:45 AM CT)"], ["daybefore", "The afternoon before (3:30 PM CT)"]].map(([v, t]) => `<option value="${v}" ${n.remind === v ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+    <div class=meta>"At its time" fires while Ghost Trader is open; if it's closed then, the reminder shows the next time you open it (marked missed). The morning and afternoon-before reminders come from the timer, which also runs when the app is closed. Notes and events are logged in History and the run CSV.</div>
     <div id=ntErr></div>
     <div class=actions style="justify-content:space-between">${isNew ? "<span></span>" : `<button class="btn danger" id=ntDel>Delete</button>`}<span style="display:flex;gap:8px"><button class=btn onclick="closeOverlay()">Cancel</button><button class="btn primary" id=ntSave>${isNew ? "Add" : "Save"}</button></span></div></div></div>`;
   let kind = n.kind;
   $$("[data-nk]").forEach(b => b.onclick = () => { kind = b.dataset.nk; $$("[data-nk]").forEach(x => x.classList.toggle("on", x === b));
-    $("#ntTimeRow").style.display = kind === "event" ? "" : "none"; $("#ntLab").textContent = kind === "note" ? "Note" : "Title"; });
+    showTime(); $("#ntLab").textContent = kind === "note" ? "Note" : "Title"; });
+  const showTime = () => { $("#ntTimeRow").style.display = kind === "event" || $("#ntRem").value === "attime" ? "" : "none"; };
+  $("#ntRem").onchange = showTime;
   $("#ntTitle").focus();
   $("#ntSave").onclick = async () => {
-    const r = await api("note_save", {id: n.id || null, day: n.day, kind, title: $("#ntTitle").value, body: $("#ntBody").value, time: kind === "event" ? $("#ntTime").value : null, remind: $("#ntRem").value});
+    const r = await api("note_save", {id: n.id || null, day: n.day, kind, title: $("#ntTitle").value, body: $("#ntBody").value, time: kind === "event" || $("#ntRem").value === "attime" ? $("#ntTime").value : null, remind: $("#ntRem").value});
     if (r.error) { $("#ntErr").innerHTML = `<div class="alert e" style="margin-top:8px"><span class=ic>${I("warn")}</span><span>${esc(r.error)}</span></div>`; return; }
     closeOverlay(); toast(`${I("check")} ${isNew ? "Added" : "Saved"}`, 1500); renderCalendar(); };
   if ($("#ntDel")) $("#ntDel").onclick = async () => { const r = await api("note_delete", {id: n.id}); if (r.error) return toast(esc(r.error)); closeOverlay(); toast(`${I("check")} Deleted`, 1500); renderCalendar(); };
@@ -1414,5 +1416,17 @@ async function startup() {
   ui.tab = "Portfolio";
   await render();
   if (!st.run) newRun();
+  checkReminders(); setInterval(checkReminders, 30000);
+}
+
+/* ---------- exact-time reminders (v1.12.4) ---------- */
+async function checkReminders() {
+  const r = await api("reminders_due"); if (!r || r.error || !(r.items || []).length) return;
+  let box = $("#remBox"); if (!box) { box = document.createElement("div"); box.id = "remBox"; document.body.appendChild(box); }
+  for (const x of r.items) {
+    const d = document.createElement("div"); d.className = "remcard";
+    d.innerHTML = `<div class=remhd>${I("alert")} ${x.missed ? "Missed reminder" : "Reminder"}<span class=remx data-tip="Dismiss">${I("x")}</span></div><div><b>${esc(x.title)}</b></div>${x.body ? `<div class=meta>${esc(x.body)}</div>` : ""}<div class=meta>${x.missed ? `Was due ${esc(x.when)}, while Ghost Trader was closed` : esc(x.when)}</div>`;
+    d.querySelector(".remx").onclick = () => d.remove(); box.appendChild(d);
+  }
 }
 startup();

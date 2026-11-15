@@ -978,7 +978,8 @@ class App:
 
     # ------------------------------------------------------------------ calendar notes (v1.12.0)
     NOTE_REMIND = {"none": "no reminder", "morning": "reminder that morning (7:45 AM CT)",
-                   "daybefore": "reminder the afternoon before (3:30 PM CT)"}
+                   "daybefore": "reminder the afternoon before (3:30 PM CT)",
+                   "attime": "reminder at its time (when the app is open, else the next time it opens)"}
 
     def api_note_save(self, day, kind="note", title="", body="", time=None, remind="none", id=None):
         try:
@@ -995,7 +996,9 @@ class App:
         if remind not in self.NOTE_REMIND:
             return {"error": "Unknown reminder."}
         tm = None
-        if kind == "event" and time:
+        if remind == "attime" and not time:
+            return {"error": "Give it a time (like 1:15 PM) for a reminder at that time."}
+        if time:
             try:
                 tm = dt.datetime.strptime(str(time).strip().upper().replace(" ", ""), "%I:%M%p").strftime("%H:%M")
             except ValueError:
@@ -1003,6 +1006,12 @@ class App:
                     tm = dt.datetime.strptime(str(time).strip(), "%H:%M").strftime("%H:%M")
                 except ValueError:
                     return {"error": "Times look like 2:30 PM or 14:30."}
+        if remind == "attime":
+            due = dt.datetime.combine(d, dt.datetime.strptime(tm, "%H:%M").time(), tzinfo=timeutil.CT)
+            old_same = id and self.db.one("SELECT 1 FROM notes WHERE id=? AND deleted=0 AND day=? AND time=? AND remind='attime'",
+                                          (int(id), d.isoformat(), tm))
+            if due <= timeutil.now() and not old_same:
+                return {"error": "That time has already passed."}
         now = timeutil.iso()
         word = "Note" if kind == "note" else "Event"
         when = timeutil.fmt_date(d.isoformat()) + (f", {_hm(tm)} CT" if tm else "")
@@ -1012,8 +1021,8 @@ class App:
             if not old:
                 return {"error": "That calendar item is gone."}
             self.db.x("UPDATE notes SET day=?, kind=?, title=?, body=?, time=?, remind=?, updated_at=?, "
-                      "reminded_at=CASE WHEN day=? AND remind=? THEN reminded_at ELSE NULL END WHERE id=?",
-                      (d.isoformat(), kind, title, body, tm, remind, now, d.isoformat(), remind, int(id)))
+                      "reminded_at=CASE WHEN day=? AND remind=? AND IFNULL(time,'')=? THEN reminded_at ELSE NULL END WHERE id=?",
+                      (d.isoformat(), kind, title, body, tm, remind, now, d.isoformat(), remind, tm or "", int(id)))
             self.led.event("Note", f"{word} edited for {when}: {title}", detail, data={"note_id": int(id)})
             nid = int(id)
         else:
@@ -1021,6 +1030,13 @@ class App:
                             (d.isoformat(), kind, title, body, tm, remind, now, now))
             self.led.event("Note", f"{word} added for {when}: {title}", detail, data={"note_id": nid})
         return {"ok": True, "id": nid}
+
+    def api_reminders_due(self):
+        """Exact-time reminders (v1.12.4): called by the open app every half minute and once at startup. Anything due
+        and not yet sent is sent now (desktop notification) and returned for an in-app banner; items due while the
+        app was closed come back marked `missed`, with when they were due. Each fires once."""
+        items = notify.attime_due(self.led)
+        return {"items": items}
 
     def api_note_delete(self, id):
         n = self.db.one("SELECT * FROM notes WHERE id=? AND deleted=0", (int(id),))

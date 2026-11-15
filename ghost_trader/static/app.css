@@ -71,6 +71,9 @@ body.withDrawer main{margin-right:min(480px,0px + 480px)}
 .hovbox .row{margin:4px 0}.hovbox .tot{font-weight:600;border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:6px}
 .tip{position:fixed;z-index:90;background:var(--text);color:var(--bg);font-size:12px;padding:4px 8px;border-radius:5px;white-space:nowrap;pointer-events:none;display:none}
 #tkCone{min-height:190px}
+#remBox{position:fixed;top:64px;right:16px;z-index:96;display:flex;flex-direction:column;gap:8px;max-width:340px}
+.remcard{background:var(--panel2);border:1px solid var(--warn);border-radius:8px;padding:10px 12px;box-shadow:0 8px 24px var(--shadow)}
+.remhd{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:4px}.remhd .remx{margin-left:auto;cursor:pointer;color:var(--dim)}
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);padding:9px 14px;border-radius:8px;z-index:95;box-shadow:0 8px 24px var(--shadow);display:none;max-width:90vw}
 .pin{position:absolute;z-index:15;width:380px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;box-shadow:0 12px 30px var(--shadow);font-size:13px}
 .pin .row{margin:4px 0}.pin .row>.meta{white-space:nowrap}

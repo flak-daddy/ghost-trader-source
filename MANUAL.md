@@ -469,6 +469,7 @@ Ghost Trader can send desktop notifications, even when the app is closed. A smal
 | Expiration day | 7:45 AM on a day your options expire: which ones, and TQQQ versus each strike. |
 | End-of-day summary | 3:30 PM: the day's change in account value, premium collected, interest earning per day, and what expires on the next trading day. Turn it on or off in Settings → Notifications. *Send now* shows today's. |
 | Calendar reminders | 7:45 AM on the day, or 3:30 PM the weekday before, for notes and events you set a reminder on (Market → calendar). |
+| Reminder at its time | Exact-time reminders (a note or event with a time, reminder set to *At its time*) fire at that time **while Ghost Trader is open**: a desktop notification and a card in the app. If it was closed then, the reminder shows the next time you open it, marked *missed* with when it was due. |
 | Indicator alerts | When a reading you chose crosses your level, for example the 14,3,3 stochastic dropping below 20, Fear & Greed going under 25, or the VIX rising above 30. |
 
 Indicator alerts are set up in Settings → Notifications. Each rule picks a reading (any of the four stochastics, the VIX, or Fear & Greed), *below* or *above*, and a level. *Add suggested* fills in four common ones. Each row shows the reading right now, with a dot if it's already past the level.
@@ -505,6 +506,8 @@ On the Market tab, a month view of weekdays shows:
 - an **event** with a title and an optional time in Central (e.g. "2:30 PM Review my Dec puts").
 
 Either can have **details** and a **reminder**: *that morning* (7:45 AM CT) or *the afternoon before* (3:30 PM CT on the weekday before). Reminders are desktop notifications from the same timer as the expiration nudge, so they arrive even when Ghost Trader is closed; each fires once. Click a note or event to edit or delete it. Adding, editing and deleting are logged in **History**, and so in the History and run **CSV** exports.
+
+A reminder can also be **at its time**: give the note or event a time (like 1:15 PM, Central) and choose *At its time*. It fires at that moment if Ghost Trader is open (desktop notification plus a card in the top right of the app, which you dismiss with the x). If the app was closed at that time, you get it the next time you open Ghost Trader, marked **missed**, with the time it was due. A time that has already passed can't be set. Each reminder fires once; change its time and it fires again.
 
 ### Chain
 

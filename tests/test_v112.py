@@ -105,3 +105,29 @@ def test_cone_for_ticket_option(tmp_path, monkeypatch):
     p = d["positions"][0]
     assert p["strike"] == 50 and p["type"] == "put" and p["dte"] == 20 and "(this ticket)" in p["label"]
     assert d["horizon"] == 20
+
+
+def test_exact_time_reminders(home, monkeypatch):
+    a = ready(home)
+    sent = []
+    monkeypatch.setattr(notify, "send", lambda t, b: (sent.append((t, b)), (True, "ok"))[1])
+    day = timeutil.today_ct() + dt.timedelta(days=3)
+    assert "time" in a.api_note_save(day=day.isoformat(), kind="note", title="x", remind="attime")["error"]
+    assert "passed" in a.api_note_save(day=(timeutil.today_ct() - dt.timedelta(days=1)).isoformat(), kind="note", title="x",
+                                       time="1:15 PM", remind="attime")["error"]
+    a.api_note_save(day=day.isoformat(), kind="note", title="call the broker", body="re: roll", time="1:15 PM", remind="attime")
+    a.api_note_save(day=day.isoformat(), kind="event", title="other", time="4:00 PM", remind="attime")
+    a.api_note_save(day=day.isoformat(), kind="event", title="no reminder", time="1:00 PM", remind="none")
+    at = lambda h, m: dt.datetime.combine(day, dt.time(h, m), tzinfo=timeutil.CT)  # noqa: E731
+    assert notify.attime_due(a.led, at(13, 14)) == []                       # not yet
+    got = notify.attime_due(a.led, at(13, 16))                              # app was open: on time
+    assert [g["title"] for g in got] == ["call the broker"] and not got[0]["missed"]
+    assert sent[-1][1].startswith("Reminder: call the broker")
+    assert notify.attime_due(a.led, at(13, 40)) == []                       # fires once
+    late = notify.attime_due(a.led, at(21, 0) + dt.timedelta(days=1))       # app opened a day later
+    assert [g["title"] for g in late] == ["other"] and late[0]["missed"] and "4:00 PM CT" in late[0]["when"]
+    assert sent[-1][1].startswith("Missed reminder, due")
+    # moving a reminder's time re-arms it
+    rid = a.db.val("SELECT id FROM notes WHERE title='call the broker'")
+    a.api_note_save(id=rid, day=day.isoformat(), kind="note", title="call the broker", time="2:00 PM", remind="attime")
+    assert [g["title"] for g in notify.attime_due(a.led, at(14, 1))] == ["call the broker"]
