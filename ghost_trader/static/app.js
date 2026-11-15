@@ -420,6 +420,8 @@ function renderTicket() {
   if (avBefore != null && avAfter != null) effects += `<div class=row><label>Available after</label><span>${mc(avBefore)} → <b>${mc(avAfter)}</b></span></div>`;
   const priceBad = !c.ok && /price|bid|ask/.test(c.msg);
   document.body.classList.add("withDrawer");
+  const keepY = ($("#drawer .drawer") || {}).scrollTop || 0; /* keep the scroll place across re-renders */
+  if (keepY) queueMicrotask(() => { const el = $("#drawer .drawer"); if (el) el.scrollTop = keepY; });
   $("#drawer").innerHTML = `<div class=drawer>
     <div style="display:flex;justify-content:space-between"><span><b style="font-size:15px">${titles[tk.action]}</b>${helpFor(tk)}</span><button class="btn small" onclick="cancelTicket()">${tk.from ? "Back" : "Close"} <span class=kbd>Esc</span></button></div>
     <div class=meta>TQQQ ${f2(d.price)} · ${qtxt} <span class=lnk style="color:var(--accent)" id=tkRef>${I("refresh")} Refresh quote</span></div>
