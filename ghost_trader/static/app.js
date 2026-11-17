@@ -642,6 +642,46 @@ function miniChart(c) {
     <path d="M${p.map(q => `${X(q.x).toFixed(1)},${Y(q.y).toFixed(1)}`).join("L")}" fill="none" stroke="var(--s1)" stroke-width="1.6" opacity=".7"/>
     ${p.map(q => `<circle cx="${X(q.x).toFixed(1)}" cy="${Y(q.y).toFixed(1)}" r="4" fill="${q.color || "var(--s1)"}" stroke="var(--panel)" stroke-width="1.5" data-tip="${esc(q.tip)}"/>`).join("")}</svg>`;
 }
+/* ---------- INDICATORS · LAYERS (v1.13.1): the four curves on one chart, each toggled on/off ---------- */
+const LAYERS = [["px", "TQQQ price", "var(--text)", "scaled to the range"], ["st", "Stochastic %K", "var(--s1)", "0–100"], ["vix", "VIX", "var(--s2)", "scaled to the range"], ["fg", "Fear & Greed", "var(--s3)", "0–100"]];
+function layersCard(d, sel, label) {
+  const R = ui.indLayerRange || "3M", on = ui.indLayerOn || (ui.indLayerOn = {px: true, st: true, vix: true, fg: true});
+  const cut = isoMinus(RDAYS[R]); let i0 = d.days.findIndex(x => x >= cut); if (i0 < 0) i0 = d.days.length;
+  const days = d.days.slice(i0), N = days.length;
+  const raw = {px: d.close.slice(i0), st: sel.k.slice(i0), vix: d.vix.slice(i0), fg: d.fg.slice(i0)};
+  const norm = (a, fixed) => { if (fixed) return a; const v = a.filter(x => x != null); if (!v.length) return a; const lo = Math.min(...v), hi = Math.max(...v); return a.map(x => x == null ? null : hi === lo ? 50 : (x - lo) / (hi - lo) * 100); };
+  const ser = {px: norm(raw.px), st: raw.st, vix: norm(raw.vix), fg: raw.fg};
+  const W = 1100, H = 560, L = 44, Rr = 14, T = 12, B = 26, pw = W - L - Rr, ph = H - T - B;
+  const X = i => L + (N <= 1 ? 0 : i / (N - 1) * pw), Y = v => T + (1 - v / 100) * ph;
+  let g = [0, 20, 50, 80, 100].map(v => `<line x1=${L} x2=${W - Rr} y1=${Y(v)} y2=${Y(v)} stroke="var(--line)" vector-effect="non-scaling-stroke" ${v === 20 || v === 80 ? 'stroke-dasharray="4 4"' : ""}/><text x=${L - 6} y=${Y(v) + 4} text-anchor=end font-size=11 fill="var(--dim)">${v}</text>`).join("");
+  const tickN = Math.min(6, N), xt = []; for (let k = 0; k < tickN; k++) { const i = Math.round(k / Math.max(1, tickN - 1) * (N - 1)); if (days[i]) xt.push(`<text x=${X(i)} y=${H - 6} text-anchor=middle font-size=11 fill="var(--dim)">${fmtDay(days[i])}</text>`); }
+  const paths = LAYERS.filter(l => on[l[0]]).map(([k, , col]) => { let dpath = "", pen = false;
+    ser[k].forEach((v, i) => { if (v == null) { pen = false; return; } dpath += (pen ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1); pen = true; });
+    return `<path d="${dpath}" fill="none" stroke="${col}" stroke-width="${k === "px" ? 2.4 : 1.8}" stroke-linejoin="round" vector-effect="non-scaling-stroke" opacity="${k === "px" ? 1 : .92}"/>`; }).join("");
+  const rseg2 = `<span class="seg irng">${RANGES.map(r => `<button class="btn small ${R === r ? "on" : ""}" data-lr="${r}">${r}</button>`).join("")}</span>`;
+  const chips = LAYERS.map(([k, name, col]) => `<button class="lchip ${on[k] ? "on" : ""}" data-ly="${k}" aria-pressed="${!!on[k]}"><i style="background:${col}"></i>${name}</button>`).join("");
+  const stabs = `<div class=stabs role=tablist>${d.lookbacks.map(String).map(k => `<button role=tab class="${k === ui.indN ? "on" : ""}" data-in="${k}">${label(k)}</button>`).join("")}</div>`;
+  return `<div class="card igroup layers" style="margin-top:12px;position:relative">
+    <div class="gtitle gflex"><span>Layers <span class=meta style="text-transform:none;letter-spacing:0;margin-left:10px">price and the VIX are scaled to the range so every curve fits; hover for the real values</span></span>${rseg2}</div>
+    <div class=lchips>${chips}</div>
+    <div class=lwrap id=lwrap><svg id=lsvg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="none" style="display:block;height:auto;aspect-ratio:${W}/${H}">${g}${xt.join("")}${paths}<line id=lcur x1=0 x2=0 y1=${T} y2=${T + ph} stroke="var(--dim)" stroke-dasharray="3 3" style="display:none"/></svg><div class=itip id=ltip style="display:none"></div></div>
+    <div class=lfoot><span class=meta>${on.st ? "Stochastic uses the lookback you pick →" : "Switch Stochastic on to pick a lookback"}</span>${stabs}</div></div>`;
+}
+function wireLayers(d, sel) {
+  const svg = $("#lsvg"); if (!svg) return;
+  const R = ui.indLayerRange || "3M", cut = isoMinus(RDAYS[R]); let i0 = d.days.findIndex(x => x >= cut); if (i0 < 0) i0 = d.days.length;
+  const days = d.days.slice(i0), N = days.length, L = 44, Rr = 14, W = 1100;
+  const raw = {px: d.close.slice(i0), st: sel.k.slice(i0), vix: d.vix.slice(i0), fg: d.fg.slice(i0)}, fmt = {px: v => "$" + f2(v), st: r0, vix: f2, fg: r0};
+  $$("[data-ly]").forEach(b => b.onclick = () => { ui.indLayerOn[b.dataset.ly] = !ui.indLayerOn[b.dataset.ly]; renderIndicators(); });
+  $$("[data-lr]").forEach(b => b.onclick = () => { ui.indLayerRange = b.dataset.lr; renderIndicators(); });
+  const wrap = $("#lwrap"), tip = $("#ltip"), cur = $("#lcur");
+  wrap.onmousemove = e => { const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * W;
+    const i = Math.max(0, Math.min(N - 1, Math.round((x - L) / (W - L - Rr) * (N - 1)))); if (!N) return;
+    const xx = L + (N <= 1 ? 0 : i / (N - 1) * (W - L - Rr)); cur.setAttribute("x1", xx); cur.setAttribute("x2", xx); cur.style.display = "";
+    tip.innerHTML = `<b>${fmtDay(days[i])}</b>` + LAYERS.filter(l => ui.indLayerOn[l[0]]).map(([k, name, col]) => `<div><span style="color:${col}">●</span> ${name} <b>${raw[k][i] == null ? "—" : fmt[k](raw[k][i])}</b></div>`).join("");
+    tip.style.display = "block"; const lx = (xx / W) * r.width; tip.style.left = (lx > r.width - 190 ? lx - 180 : lx + 12) + "px"; tip.style.top = "10px"; };
+  wrap.onmouseleave = () => { tip.style.display = "none"; cur.style.display = "none"; };
+}
 async function renderIndicators(refresh) {
   if (!indData || refresh) {
     if (!indData) $("#main").innerHTML = `<div class=meta style="padding:20px 0"><span class=spin>${I("spin")}</span> Getting TQQQ, the VIX and Fear & Greed…</div>`;
@@ -678,6 +718,7 @@ async function renderIndicators(refresh) {
   const nTr = Object.keys(d.trades || {}).length;
   const bar = `<div class=bar style="margin-bottom:10px;justify-content:flex-end">
     <span class=meta data-tip="Your trades this run, drawn on the charts: ◆ on the price chart, a faint line on the others (blue opened, gray closed, amber assigned or called away, green expired worthless). Hover a day to see them.">Your trades</span>${seg([["0", "Off"], ["1", "On"]], ui.indTrades ? "1" : "0", "data-itr")}
+    ${seg([["layers", "Layers"], ["stacked", "Stacked"]], ui.indLayers === false ? "stacked" : "layers", "data-il")}
     ${seg([["chart", "Chart"], ["table", "Table"]], ui.indTable ? "table" : "chart", "data-iv")}
     <button class="btn small" id=indRef>${I("refresh")} Refresh</button></div>`;
   const pctv = a => a ? a.map(x => x == null ? null : x * 100) : a;
@@ -699,6 +740,8 @@ async function renderIndicators(refresh) {
     const i0 = G.px;
     const rows = d.days.slice(i0).map((day, j) => { const i = i0 + j; return `<tr><td class=l>${esc(fmtDay(day))}</td><td>${f2(d.close[i])}</td><td>${r0(sel.k[i])}</td>${sel.d ? `<td>${r0(sel.d[i])}</td>` : ""}<td>${d.vix[i] == null ? "—" : f2(d.vix[i])}</td><td>${r0(d.fg[i])}</td><td class="l meta">${d.fg[i] == null ? "" : fgName(d.fg[i])}</td><td>${d.iv[i] == null ? "—" : (d.iv[i] * 100).toFixed(0) + "%"}</td><td>${d.hv[i] == null ? "—" : (d.hv[i] * 100).toFixed(0) + "%"}</td>${ui.indTrades ? `<td class="l meta">${(d.trades[day] || []).map(t => esc(t.text)).join("<br>")}</td>` : ""}</tr>`; }).reverse().join("");
     body = `<div class="stochpanel tblmode" style="margin-top:12px">${stochTabs}</div><div class=meta style="margin:6px 2px">The tabs pick the stochastic column; the range picks the dates.</div><div class=chainbox style="max-height:60vh"><table class=both><thead><tr><th class=l>Date</th><th>TQQQ close</th><th>Stoch ${label(n)} %K</th>${sel.d ? "<th>%D</th>" : ""}<th>VIX</th><th>Fear &amp; Greed</th><th></th><th>IV</th><th>Realized</th>${ui.indTrades ? "<th class=l>Your trades</th>" : ""}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  } else if (ui.indLayers !== false) {
+    body = `<div class=ichartbox id=ichartbox style="position:relative">${layersCard(d, sel, label)}${volGroup()}<div class=itip id=itip></div></div>`;
   } else {
     const cl = sl(d.close, "px").filter(x => x != null), clo = Math.min(...cl), chi = Math.max(...cl), cp = Math.max((chi - clo) * .06, .3);
     const vx = sl(d.vix, "mood").filter(x => x != null), vlo = vx.length ? Math.min(...vx) : 10, vhi = vx.length ? Math.max(...vx) : 30, vp = Math.max((vhi - vlo) * .08, .5);
@@ -722,6 +765,8 @@ async function renderIndicators(refresh) {
   $$("[data-rg]").forEach(b => b.onclick = () => { const [g, r] = b.dataset.rg.split(":"); ui.indRanges = {...ui.indRanges, [g]: r};
     api("settings_set", {ind_ranges: {[g]: r}}); renderIndicators(); });
   $$("[data-iv]").forEach(b => b.onclick = () => { ui.indTable = b.dataset.iv === "table"; renderIndicators(); });
+  $$("[data-il]").forEach(b => b.onclick = () => { ui.indLayers = b.dataset.il === "layers"; renderIndicators(); });
+  if (!ui.indTable && ui.indLayers !== false && NN) wireLayers(d, sel);
   $$("[data-itr]").forEach(b => b.onclick = () => { ui.indTrades = b.dataset.itr === "1"; api("settings_set", {ind_trades: ui.indTrades}); renderIndicators(); });
   if ($("#volNow")) loadVolNow();
   $("#indRef").onclick = async () => { $("#indRef").innerHTML = `<span class=spin>${I("spin")}</span> Refreshing…`; await renderIndicators(true); };
