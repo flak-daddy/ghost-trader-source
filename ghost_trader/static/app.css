@@ -197,3 +197,6 @@ input.bad{border-color:var(--down)}
 .lfoot .stabs{border-bottom:0}.layers .lwrap svg{cursor:crosshair}
 .wlgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-bottom:10px}.wlcard{cursor:pointer;padding:10px 12px}.wlcard:hover{border-color:var(--accent)}.wlcard .big{display:block;margin:4px 0 2px}
 .tilebtns{display:flex;gap:6px;margin-top:8px}.tilebtns .btn:disabled{opacity:.45;cursor:not-allowed}
+
+code.oline{display:block;margin-top:6px;padding:6px 8px;border:1px dashed var(--line);border-radius:6px;background:var(--bg);font-family:ui-monospace,monospace;font-size:12.5px;user-select:all;word-break:break-word}
+.olrow{display:flex;gap:8px;align-items:flex-start}.olrow code.oline{flex:1;margin-top:0}

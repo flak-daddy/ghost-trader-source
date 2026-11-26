@@ -569,6 +569,8 @@ The ticket opens on the right. It shows:
 - **Compare:** a table of the same trade across other **dates** or other **strikes**, with return and annualized return. The best annualized return gets a star. Click a row to switch to it.
 - **Rule check:** a green line if the trade passes every rule, or a red line saying exactly what's wrong.
 
+At the bottom of the ticket, under the rules check, is a line such as `SELL TO OPEN 1 TQQQ 12/11/2026 47.00 PUT · LIMIT 1.15 · DAY` with a **Copy** button (v1.24.0). It shows how the same trade reads at a broker, so you get used to the format. It's only text: nothing is sent anywhere, and it appears once the ticket passes the rules check. It follows the symbol, the contract, the quantity and your fill price.
+
 Click **Review trade** to see a summary, then **Confirm** (or press Enter). **Trades can't be undone.** To reverse one, you'd have to make the opposite trade at the current price.
 
 ### The rules

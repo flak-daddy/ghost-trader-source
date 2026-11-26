@@ -16,6 +16,23 @@ from .startup import Startup
 
 log = logging.getLogger("ghost_trader.api")
 
+ACTION_TXT = {"sell_to_open": "SELL TO OPEN", "buy_to_open": "BUY TO OPEN", "buy_to_close": "BUY TO CLOSE",
+              "sell_to_close": "SELL TO CLOSE", "buy_shares": "BUY", "sell_shares": "SELL"}
+
+
+def order_line(o):
+    """A broker-style line for a ticket, e.g. SELL TO OPEN 1 TQQQ 12/11/2026 47.00 PUT · LIMIT 1.15 · DAY.
+    Text only: for getting used to how a real order reads. Nothing here sends anything anywhere (v1.24.0)."""
+    act = ACTION_TXT.get(o.get("action"), str(o.get("action", "")).upper())
+    sym = (o.get("symbol") or SYMBOL).upper()
+    if str(o.get("action", "")).endswith("shares"):
+        s = f"{act} {o['qty']} {sym}"
+    else:
+        d = dt.date.fromisoformat(o["expiry"])
+        s = f"{act} {o['qty']} {sym} {d.month:02d}/{d.day:02d}/{d.year} {float(o['strike']):.2f} {str(o['type']).upper()}"
+    px = o.get("price")
+    return s + (f" · LIMIT {float(px):.2f}" if px else "") + " · DAY"
+
 
 def _fmt_ts(ts):
     t = timeutil.parse(ts) if isinstance(ts, str) else ts
@@ -483,6 +500,10 @@ class App:
             if out["too_old"]:
                 out["check"] = {"ok": False, "msg": "These quotes are more than 15 minutes old. Click Refresh quote.",
                                 "warn": None}
+        try:
+            out["order_line"] = order_line({**o, **chk["order"]}) if out["check"]["ok"] else ""
+        except (KeyError, TypeError, ValueError):
+            out["order_line"] = ""
         if o["action"].endswith("shares"):
             return out
         rate = self.rates.for_day(timeutil.today_ct()) or 0.0

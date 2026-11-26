@@ -28,6 +28,11 @@ const I = n => `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentCo
 const LOGO = `<svg class="i" style="width:1.3em;height:1.3em;color:var(--accent)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3a7 7 0 0 0-7 7v10.5l2.4-1.7 2.3 1.7 2.3-1.7 2.3 1.7 2.3-1.7 2.4 1.7V10a7 7 0 0 0-7-7z" fill="color-mix(in srgb,currentColor 18%,transparent)"/><circle cx="9.5" cy="10.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="14.5" cy="10.5" r="1.3" fill="currentColor" stroke="none"/></svg>`;
 $("#logo").innerHTML = LOGO;
 
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; } catch (e) { /* fall through */ }
+  const ta = document.createElement("textarea"); ta.value = t; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand("copy"); } catch (e) { ok = false; } ta.remove(); return ok;
+}
 function toast(msg, ms = 3600) { const t = $("#toast"); t.innerHTML = msg; t.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = "none", ms); }
 
 async function api(name, args = {}) {
@@ -677,7 +682,9 @@ function renderTicket() {
     ${cmp}
     ${c.warn ? `<div class="alert w" style="margin:8px 0"><span class=ic>${I("warn")}</span><span>${esc(c.warn)}</span></div>` : ""}
     <div class="${c.ok ? "ok" : "err"}">${c.ok ? I("check") : I("x")} ${esc(c.msg)}</div>
+    ${d.order_line ? `<div class=meta style="margin-top:8px">HOW THIS READS AT A BROKER · practice only, nothing is sent</div><div class=olrow><code class=oline id=tkLine>${esc(d.order_line)}</code><button class="btn small" id=tkCopyLine>Copy</button></div>` : ""}
     <div class=actions><button class=btn onclick="cancelTicket()">Cancel</button><button class="btn primary" id=reviewBtn ${c.ok ? "" : "disabled"}>Review trade</button></div></div>`;
+  const cl = $("#tkCopyLine"); if (cl) cl.onclick = async () => toast(await copyText(d.order_line) ? `${I("check")} Order line copied` : "Couldn't copy. Select the line and copy it by hand.", 1800);
   const re = () => { tk.price = null; loadTicket(false); };
   const ex = $("#tkExp"); if (ex) ex.onchange = e => { tk.expiry = e.target.value; re(); };
   const kk = $("#tkK"); if (kk) kk.onchange = e => { tk.strike = +e.target.value; re(); };
