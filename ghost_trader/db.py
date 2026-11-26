@@ -75,6 +75,14 @@ CREATE TABLE notes(id INTEGER PRIMARY KEY, day TEXT NOT NULL, kind TEXT NOT NULL
   updated_at TEXT NOT NULL, deleted INTEGER DEFAULT 0);
 CREATE INDEX notes_day ON notes(day);
 """,
+    # v1.19.0: dividends are per symbol now (shares of more than TQQQ); past rows are TQQQ's
+    7: """
+CREATE TABLE dividends2(run_id INTEGER NOT NULL, symbol TEXT NOT NULL DEFAULT 'TQQQ', ex_day TEXT NOT NULL,
+  amount REAL NOT NULL, PRIMARY KEY(run_id, symbol, ex_day));
+INSERT INTO dividends2(run_id, symbol, ex_day, amount) SELECT run_id, 'TQQQ', ex_day, amount FROM dividends;
+DROP TABLE dividends;
+ALTER TABLE dividends2 RENAME TO dividends;
+""",
 }
 SCHEMA_VERSION = max(MIGRATIONS)
 

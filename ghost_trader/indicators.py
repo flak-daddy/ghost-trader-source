@@ -151,6 +151,25 @@ class Indicators:
             except Exception:  # noqa: BLE001
                 log.exception("on_refresh")
 
+    def refresh_symbol(self, sym, force=False):
+        """Daily bars for one other tracked symbol (v1.18.0), kept under "bars:SYM". Never raises; a failure keeps the
+        last good bars, marked failed, like the other sources."""
+        src = "bars:" + sym
+        if not force and self._fresh(src):
+            return src
+        today = timeutil.today_ct()
+        try:
+            v = self.provider.daily_bars(sym, today - dt.timedelta(days=HISTORY_DAYS), today)
+            if not v:
+                raise ValueError("no data returned")
+            self.data[src] = {"ok": True, "value": v, "error": None, "at": time.time()}
+        except Exception as e:  # noqa: BLE001
+            log.warning("indicator bars %s failed: %s", sym, e)
+            prev = self.data.get(src) or {}
+            self.data[src] = {"ok": False, "value": prev.get("value"), "error": str(e) or e.__class__.__name__,
+                              "at": prev.get("at", 0)}
+        return src
+
     def warm(self):
         """Refresh in the background if stale; returns immediately."""
         if not self.stale() or (self.warming and self.warming.is_alive()):
@@ -164,8 +183,8 @@ class Indicators:
             t.join(timeout)
 
     # ------------------------------------------------------------ views
-    def _series(self):
-        bars = sorted((self.data.get("tqqq") or {}).get("value") or [], key=lambda b: b["day"])
+    def _series(self, src="tqqq"):
+        bars = sorted((self.data.get(src) or {}).get("value") or [], key=lambda b: b["day"])
         days = [b["day"] for b in bars]
         stoch = {}
         for n in LOOKBACKS:
@@ -204,9 +223,10 @@ class Indicators:
         out["fg_rating"] = fg.get("rating")
         return out if any(v is not None for k, v in out.items() if k not in ("asof", "bars_through")) else None
 
-    def view(self, months):
-        """Everything the Indicators tab draws, trimmed to the last `months` months."""
-        bars, days, stoch, vix_map, fg, fg_map = self._series()
+    def view(self, months, src="tqqq"):
+        """Everything the Indicators tab draws, trimmed to the last `months` months. `src` is where the price bars
+        come from: "tqqq" or, for another tracked symbol, "bars:SYM". The status key stays "tqqq" either way."""
+        bars, days, stoch, vix_map, fg, fg_map = self._series(src)
         cut = (timeutil.today_ct() - dt.timedelta(days=int(months * 30.44))).isoformat()
         i0 = next((i for i, d in enumerate(days) if d >= cut), len(days))
         sl = slice(i0, None)
@@ -215,9 +235,10 @@ class Indicators:
         vix_now = vix_map[vd[-1]] if vd else None
         vix_prev = vix_map[vd[-2]] if len(vd) > 1 else None
         yr = [vix_map[d] for d in vd if d >= (timeutil.today_ct() - dt.timedelta(days=365)).isoformat()]
-        status = {s: {"ok": (self.data.get(s) or {}).get("ok", False), "error": (self.data.get(s) or {}).get("error"),
+        status = {k: {"ok": (self.data.get(s) or {}).get("ok", False), "error": (self.data.get(s) or {}).get("error"),
                       "at": timeutil.iso(dt.datetime.fromtimestamp(self.data[s]["at"], dt.timezone.utc))
-                      if (self.data.get(s) or {}).get("at") else None} for s in ("tqqq", "vix", "fg")}
+                      if (self.data.get(s) or {}).get("at") else None}
+                  for k, s in (("tqqq", src), ("vix", "vix"), ("fg", "fg"))}
         cur = {}
         for n in LOOKBACKS:
             k, d = stoch[str(n)]["k"], stoch[str(n)]["d"]

@@ -188,3 +188,5 @@ input.bad{border-color:var(--down)}
 .lwrap{position:relative}.lwrap .itip{z-index:3;min-width:150px}
 .lfoot{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:8px}
 .lfoot .stabs{border-bottom:0}.layers .lwrap svg{cursor:crosshair}
+.wlgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-bottom:10px}.wlcard{cursor:pointer;padding:10px 12px}.wlcard:hover{border-color:var(--accent)}.wlcard .big{display:block;margin:4px 0 2px}
+.tilebtns{display:flex;gap:6px;margin-top:8px}.tilebtns .btn:disabled{opacity:.45;cursor:not-allowed}

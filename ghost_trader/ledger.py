@@ -56,6 +56,7 @@ class Ledger:
     def __init__(self, db, settings):
         self.db = db
         self.settings = settings
+        self.prices = {}    # latest price per held non-TQQQ symbol; the app keeps these fresh (see set_price)
 
     # ------------------------------------------------------------------ runs
     def run(self):
@@ -117,50 +118,95 @@ class Ledger:
         return self.balances()[0]
 
     # ------------------------------------------------------------------ shares
-    def lots(self, open_only=True):
+    def lots(self, open_only=True, symbol=None):
+        """Share lots of this run. `symbol` limits them to one symbol; None means every symbol."""
         rid = self.run_id()
-        sql = "SELECT * FROM lots WHERE run_id=?" + (" AND open_qty>0" if open_only else "") + " ORDER BY id"
-        return self.db.q(sql, (rid,))
+        sql = "SELECT * FROM lots WHERE run_id=?" + (" AND open_qty>0" if open_only else "")
+        args = [rid]
+        if symbol:
+            sql += " AND symbol=?"
+            args.append(symbol)
+        return self.db.q(sql + " ORDER BY id", args)
 
-    def shares(self):
-        return self.db.val("SELECT SUM(open_qty) FROM lots WHERE run_id=?", (self.run_id(),), 0)
+    def shares(self, symbol=SYMBOL):
+        """Shares held of one symbol (TQQQ unless told otherwise: options are TQQQ-only for now)."""
+        return self.db.val("SELECT SUM(open_qty) FROM lots WHERE run_id=? AND symbol=?", (self.run_id(), symbol), 0)
 
-    def shares_on(self, day, run_id=None):
+    def holdings(self):
+        """{symbol: shares} for everything held, TQQQ first."""
+        rows = self.db.q("SELECT symbol, SUM(open_qty) FROM lots WHERE run_id=? AND open_qty>0 GROUP BY symbol",
+                         (self.run_id(),))
+        d = {r[0]: r[1] for r in rows}
+        return dict(sorted(d.items(), key=lambda kv: (kv[0] != SYMBOL, kv[0])))
+
+    def set_price(self, symbol, price):
+        """The latest price for a held symbol, used to value it (the app sets these whenever it has fresh quotes)."""
+        if price:
+            self.prices[symbol] = float(price)
+
+    def price_of(self, symbol):
+        """Latest known price: the one the app set, else the last saved quote or close, else the average cost."""
+        p = self.prices.get(symbol)
+        if p:
+            return p
+        r = self.db.one("SELECT last FROM quotes WHERE contract=?", ("_U_" + symbol,))
+        if r and r[0]:
+            return r[0]
+        r = self.db.one("SELECT close FROM prices WHERE symbol=? ORDER BY day DESC LIMIT 1", (symbol,))
+        return r[0] if r else self.avg_cost(symbol)
+
+    def others_value_c(self, day=None):
+        """Value of shares in every symbol except TQQQ, at the latest known prices (or, for a past day, at each
+        symbol's last saved close on or before it)."""
+        tot = 0
+        syms = self.db.q("SELECT DISTINCT symbol FROM lots WHERE run_id=? AND symbol!=?", (self.run_id(), SYMBOL))
+        for (s,) in syms:
+            if day:
+                n = self.shares_on(day, symbol=s)
+                if n:
+                    r = self.db.one("SELECT close FROM prices WHERE symbol=? AND day<=? ORDER BY day DESC LIMIT 1",
+                                    (s, day if isinstance(day, str) else day.isoformat()))
+                    tot += cents(n * (r[0] if r else self.price_of(s)))
+            else:
+                tot += cents(self.shares(s) * self.price_of(s))
+        return tot
+
+    def shares_on(self, day, run_id=None, symbol=SYMBOL):
         rid = run_id or self.run_id()
         d = day if isinstance(day, str) else day.isoformat()
         r = self.db.one(
-            "SELECT SUM(CASE direction WHEN 'in' THEN qty ELSE -qty END) FROM lot_moves WHERE run_id=? AND day<=?",
-            (rid, d))
+            "SELECT SUM(CASE m.direction WHEN 'in' THEN m.qty ELSE -m.qty END) FROM lot_moves m JOIN lots l ON l.id=m.lot_id"
+            " WHERE m.run_id=? AND m.day<=? AND l.symbol=?", (rid, d, symbol))
         return r[0] or 0
 
-    def locked_shares(self):
+    def locked_shares(self, symbol=SYMBOL):
         return 100 * self.db.val(
-            "SELECT SUM(open_qty) FROM positions WHERE run_id=? AND status='open' AND type='call' AND side='short'",
-            (self.run_id(),), 0)
+            "SELECT SUM(open_qty) FROM positions WHERE run_id=? AND status='open' AND type='call' AND side='short'"
+            " AND symbol=?", (self.run_id(), symbol), 0)
 
-    def free_shares(self):
-        return self.shares() - self.locked_shares()
+    def free_shares(self, symbol=SYMBOL):
+        return self.shares(symbol) - self.locked_shares(symbol)
 
-    def avg_cost(self):
-        rows = self.lots()
+    def avg_cost(self, symbol=SYMBOL):
+        rows = self.lots(symbol=symbol)
         n = sum(r["open_qty"] for r in rows)
         return sum(r["open_qty"] * r["cost"] for r in rows) / n if n else 0.0
 
-    def _add_lot(self, qty, price, ts, source, how, event_id, position_id=None):
+    def _add_lot(self, qty, price, ts, source, how, event_id, position_id=None, symbol=SYMBOL):
         day = ts.astimezone(timeutil.CT).date().isoformat()
         lid = self.db.x(
             "INSERT INTO lots(run_id,symbol,qty,open_qty,cost,acquired_at,acquired_day,source,source_position_id)"
             " VALUES(?,?,?,?,?,?,?,?,?)",
-            (self.run_id(), SYMBOL, qty, qty, price, timeutil.iso(ts), day, source, position_id))
+            (self.run_id(), symbol, qty, qty, price, timeutil.iso(ts), day, source, position_id))
         self.db.x("INSERT INTO lot_moves(run_id,lot_id,ts,day,direction,qty,price,how,event_id,position_id)"
                   " VALUES(?,?,?,?,'in',?,?,?,?,?)",
                   (self.run_id(), lid, timeutil.iso(ts), day, qty, price, how, event_id, position_id))
         return lid
 
-    def _remove_shares(self, qty, price, ts, how, event_id, prefer_lot=None, position_id=None):
+    def _remove_shares(self, qty, price, ts, how, event_id, prefer_lot=None, position_id=None, symbol=SYMBOL):
         """Take `qty` shares out of lots (preferred lot first, then oldest first). Returns [(lot_id, n, cost)]."""
         day = ts.astimezone(timeutil.CT).date().isoformat()
-        lots = list(self.lots())
+        lots = list(self.lots(symbol=symbol))
         if prefer_lot:
             lots.sort(key=lambda r: (r["id"] != prefer_lot, r["id"]))
         taken, left = [], qty
@@ -211,16 +257,24 @@ class Ledger:
 
     def account_value_c(self, share_price):
         a, c = self.balances()
-        return a + c + cents(self.shares() * (share_price or 0))
+        return a + c + cents(self.shares() * (share_price or 0)) + self.others_value_c()
 
     def breakdown(self, share_price):
         a, c = self.balances()
         acc = self.accrued()
         sh = self.shares()
+        tq, oth = cents(sh * (share_price or 0)), self.others_value_c()
+        hold = []
+        for s, n in self.holdings().items():
+            px = share_price if s == SYMBOL else self.price_of(s)
+            hold.append({"symbol": s, "shares": n, "price": px, "value_c": cents(n * (px or 0)),
+                         "avg_cost": self.avg_cost(s), "locked": self.locked_shares(s)})
         return {
             "available_c": a, "collateral_c": c, "accrued": round(acc, 6), "accrued_c": cents(acc),
-            "shares": sh, "share_price": share_price, "shares_value_c": cents(sh * (share_price or 0)),
-            "account_value_c": a + c + cents(sh * (share_price or 0)),
+            "shares": sh, "share_price": share_price,   # TQQQ's count and price; options use these
+            "shares_value_c": tq + oth,                  # every symbol's shares, at their latest prices
+            "holdings": hold,
+            "account_value_c": a + c + tq + oth,
         }
 
     # ------------------------------------------------------------------ order checking
@@ -235,6 +289,10 @@ class Ledger:
         act = o["action"]
         if act not in ACTIONS:
             res["msg"] = "Unknown action."
+            return res
+        sym = o["symbol"]
+        if act not in ("buy_shares", "sell_shares") and sym != SYMBOL:
+            res["msg"] = f"Options are {SYMBOL}-only for now. You can buy and sell shares of {sym}."
             return res
         qty = o["qty"]
         if not isinstance(qty, int) or qty <= 0:
@@ -333,10 +391,11 @@ class Ledger:
             eff.update(cost_c=gross, available_after_c=avail - gross)
             msg = f"Paid from Available: {money(gross)}"
         elif act == "sell_shares":
-            free = self.free_shares()
+            free = self.free_shares(sym)
             if qty > free:
-                res["msg"] = (f"Only {free} shares are free to sell ({self.locked_shares()} are covering calls). "
-                              "Close or let the calls expire first.")
+                res["msg"] = (f"Only {free} {sym} shares are free to sell ({self.locked_shares(sym)} are covering calls). "
+                              "Close or let the calls expire first." if self.locked_shares(sym) else
+                              f"You hold {self.shares(sym)} {sym} shares, so you can't sell {qty}.")
                 return res
             eff.update(proceeds_c=gross, available_after_c=avail + gross)
             msg = f"{free} free shares ≥ {qty}"
@@ -462,23 +521,25 @@ class Ledger:
 
     def _buy_shares(self, o, qty, px, pc, tags, ts):
         cost = pc * qty
-        ev = self.event("Shares", f"Bought {qty} {SYMBOL} @ {px:.2f}", f"{money(-cost)} from Available"
+        sym = o["symbol"]
+        ev = self.event("Shares", f"Bought {qty} {sym} @ {px:.2f}", f"{money(-cost)} from Available"
                         + (f" · “{o['note']}”" if o["note"] else ""),
-                        {"action": "buy_shares", "qty": qty, "price": px}, tags, ts)
+                        {"action": "buy_shares", "qty": qty, "price": px, "symbol": sym}, tags, ts)
         self.move("available", -cost, "share purchase", ts, ev)
-        lid = self._add_lot(qty, px, ts, "bought", "bought", ev)
+        lid = self._add_lot(qty, px, ts, "bought", "bought", ev, symbol=sym)
         self.db.x("UPDATE events SET lot_id=? WHERE id=?", (lid, ev))
         return {"event_id": ev, "lot_id": lid}
 
     def _sell_shares(self, o, qty, px, pc, tags, ts):
         proceeds = pc * qty
-        ev = self.event("Shares", f"Sold {qty} {SYMBOL} @ {px:.2f}", "", {"action": "sell_shares", "qty": qty, "price": px},
-                        tags, ts)
+        sym = o["symbol"]
+        ev = self.event("Shares", f"Sold {qty} {sym} @ {px:.2f}", "",
+                        {"action": "sell_shares", "qty": qty, "price": px, "symbol": sym}, tags, ts)
         # Sell from lots that aren't covering calls first.
         covering = {r[0] for r in self.db.q("SELECT lot_id FROM positions WHERE run_id=? AND status='open' AND type='call'"
                                             " AND side='short'", (self.run_id(),))}
-        free_first = next((lot["id"] for lot in self.lots() if lot["id"] not in covering), None)
-        taken = self._remove_shares(qty, px, ts, "sold", ev, prefer_lot=free_first)
+        free_first = next((lot["id"] for lot in self.lots(symbol=sym) if lot["id"] not in covering), None)
+        taken = self._remove_shares(qty, px, ts, "sold", ev, prefer_lot=free_first, symbol=sym)
         gain = sum(cents((px - cost) * n) for _, n, cost in taken)
         self.move("available", proceeds, "share sale", ts, ev)
         self.db.x("UPDATE events SET detail=?, lot_id=? WHERE id=?",
@@ -689,24 +750,25 @@ class Ledger:
         return sum(coll * r / 100 / 365 for r in rates[:days])
 
     # ------------------------------------------------------------------ dividends
-    def credit_dividend(self, ex_day, amount, ts=None):
+    def credit_dividend(self, ex_day, amount, ts=None, symbol=SYMBOL):
         """Credit a cash dividend for shares held at the close before the ex-date. Idempotent."""
         ts = ts or timeutil.now()
         exd = ex_day if isinstance(ex_day, dt.date) else dt.date.fromisoformat(ex_day)
         r = self.run()
         if not r or exd <= dt.date.fromisoformat(r["start_day"]):
             return None
-        if self.db.one("SELECT 1 FROM dividends WHERE run_id=? AND ex_day=?", (r["id"], exd.isoformat())):
+        if self.db.one("SELECT 1 FROM dividends WHERE run_id=? AND symbol=? AND ex_day=?", (r["id"], symbol, exd.isoformat())):
             return None
-        held = self.shares_on(exd - dt.timedelta(days=1))
+        held = self.shares_on(exd - dt.timedelta(days=1), symbol=symbol)
         with self.db.tx():
-            self.db.x("INSERT INTO dividends(run_id,ex_day,amount) VALUES(?,?,?)", (r["id"], exd.isoformat(), amount))
+            self.db.x("INSERT INTO dividends(run_id,symbol,ex_day,amount) VALUES(?,?,?,?)",
+                      (r["id"], symbol, exd.isoformat(), amount))
             if held <= 0:
                 return None
             c = cents(amount * held)
             ev = self.event("Dividend", f"Dividend {money(c, True)}",
-                            f"{SYMBOL} ex-date {fmt_date(exd)} · ${amount:.4f}/share × {held} shares.",
-                            {"amount": amount, "shares": held}, ts=ts)
+                            f"{symbol} ex-date {fmt_date(exd)} · ${amount:.4f}/share × {held} shares.",
+                            {"amount": amount, "shares": held, "symbol": symbol}, ts=ts)
             self.move("available", c, "dividend", ts, ev)
             return ev
 
@@ -727,11 +789,13 @@ class Ledger:
             a, c = self.balances(d)
             acc = self.accrued(as_of=d)
             sh = self.shares_on(d)
+            oth = self.others_value_c(d)
         else:
             a, c = self.balances()
             acc = self.accrued()
             sh = self.shares()
-        av = a + c + cents(sh * (share_price or 0))
+            oth = self.others_value_c()
+        av = a + c + cents(sh * (share_price or 0)) + oth
         self.db.x("INSERT OR REPLACE INTO snapshots(run_id,day,ts,available_c,collateral_c,accrued,shares,share_price,"
                   "account_value_c,tqqq_close,marks,estimated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                   (r["id"], d, timeutil.iso(ts), a, c, acc, sh, share_price, av, tqqq_close,
@@ -758,6 +822,7 @@ class Ledger:
 def _norm(order):
     o = dict(order or {})
     o["action"] = o.get("action", "")
+    o["symbol"] = str(o.get("symbol") or SYMBOL).strip().upper()
     try:
         o["qty"] = int(str(o.get("qty", "")).strip())
     except ValueError:

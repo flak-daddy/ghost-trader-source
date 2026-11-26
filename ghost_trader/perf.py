@@ -30,13 +30,14 @@ def build(led, rates, share_price):
         bh.append(round(start_cash * close / entry, 2) if (entry and close) else None)
         tb.append(round(_tbill(start_cash, start_day, d, rates), 2))
     markers = []
-    for m in led.db.q("SELECT lm.*, l.source, l.cost FROM lot_moves lm JOIN lots l ON l.id=lm.lot_id "
+    for m in led.db.q("SELECT lm.*, l.source, l.cost, l.symbol FROM lot_moves lm JOIN lots l ON l.id=lm.lot_id "
                       "WHERE lm.run_id=? ORDER BY lm.ts", (rid,)):
         word = {"assigned": "Assigned", "bought": "Bought", "exercised": "Exercised", "sold": "Sold",
                 "called away": "Called away"}.get(m["how"], m["how"].title())
         markers.append({"day": m["day"], "lot_id": m["lot_id"], "dir": m["direction"], "qty": m["qty"],
                         "price": m["price"], "how": m["how"], "event_id": m["event_id"],
-                        "label": f"{word} {m['qty']} @ ${m['price']:.2f}"})
+                        "symbol": m["symbol"],
+                        "label": f"{word} {m['qty']}{'' if m['symbol'] == SYMBOL else ' ' + m['symbol']} @ ${m['price']:.2f}"})
     # monthly premium + interest
     months = {}
     for row in led.db.q("SELECT substr(day,1,7) m, reason, SUM(amount_c) FROM cash WHERE run_id=? AND reason IN "
@@ -82,6 +83,8 @@ def lot_story(led, lot_id, share_price):
     if not lot:
         return None
     lot = dict(lot)
+    if lot["symbol"] != SYMBOL:      # a lot of another symbol is valued at that symbol's price, not TQQQ's
+        share_price = led.price_of(lot["symbol"])
     tl = []
     premium_c = 0
     interest = 0.0

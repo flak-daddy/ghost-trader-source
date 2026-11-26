@@ -323,19 +323,39 @@ class Startup:
                     done.append(f"split {timeutil.fmt_date(d)}")
         except Exception as e:  # noqa: BLE001
             log.warning("splits: %s", e)
+        # dividends and splits for shares of other symbols
+        for s in [x for x in a.led.holdings() if x != SYMBOL]:
+            try:
+                for d, amt in a.provider.dividends(s):
+                    if d > dt.date.fromisoformat(r["start_day"]) and d <= timeutil.today_ct():
+                        if a.led.credit_dividend(d, amt, now, symbol=s):
+                            done.append(f"{s} dividend {timeutil.fmt_date(d)}")
+            except Exception as e:  # noqa: BLE001
+                log.warning("dividends %s: %s", s, e)
+            try:
+                for d, ratio in a.provider.splits(s):
+                    if d > dt.date.fromisoformat(r["start_day"]):
+                        known = a.db.one("SELECT handled FROM splits WHERE symbol=? AND day=?", (s, d.isoformat()))
+                        if known and known[0]:
+                            continue
+                        a.db.x("INSERT OR IGNORE INTO splits(symbol,day,ratio) VALUES(?,?,?)", (s, d.isoformat(), ratio))
+                        self._split_dialog(d, ratio, s)
+                        done.append(f"{s} split {timeutil.fmt_date(d)}")
+            except Exception as e:  # noqa: BLE001
+                log.warning("splits %s: %s", s, e)
         return " · ".join(done) if done else "nothing to settle"
 
-    def _split_dialog(self, d, ratio):
+    def _split_dialog(self, d, ratio, symbol=SYMBOL):
         a = self.app
-        aff = a.led.positions()
-        lots = a.led.lots()
+        aff = a.led.positions() if symbol == SYMBOL else []     # options are TQQQ-only
+        lots = a.led.lots(symbol=symbol)     # only this symbol's lots are adjusted
         lines = [f"{p['label']} ({p['open_qty']}) → strike ${p['strike'] / ratio:.2f}, {p['open_qty']} contracts of "
                  f"{int(100 * ratio)} shares" for p in aff]
         lines += [f"Lot of {lt['open_qty']} shares @ ${lt['cost']:.2f} → {int(lt['open_qty'] * ratio)} @ "
                   f"${lt['cost'] / ratio:.2f}" for lt in lots]
-        what = (f"{SYMBOL} split {ratio:g}-for-1 on {timeutil.fmt_date(d)}. Prices before and after aren't comparable. "
+        what = (f"{symbol} split {ratio:g}-for-1 on {timeutil.fmt_date(d)}. Prices before and after aren't comparable. "
                 "Affected items and the standard adjustment:\n" + ("\n".join(lines) if lines else "Nothing is affected."))
-        choice, _ = self._ask("split", f"{SYMBOL} split {ratio:g}-for-1", what,
+        choice, _ = self._ask("split", f"{symbol} split {ratio:g}-for-1", what,
                               [{"id": "apply", "label": "Apply these adjustments", "primary": True},
                                {"id": "manual", "label": "I'll adjust by hand later"}])
         with a.db.tx():
@@ -349,8 +369,8 @@ class Startup:
                     # Contracts keep their count; each now covers more shares. Approximate by scaling count.
                     a.db.x("UPDATE positions SET strike=strike/?, open_price=open_price/?, qty=CAST(qty*? AS INTEGER),"
                            " open_qty=CAST(open_qty*? AS INTEGER) WHERE id=?", (ratio, ratio, ratio, ratio, p["id"]))
-            a.db.x("UPDATE splits SET handled=1 WHERE symbol=? AND day=?", (SYMBOL, d.isoformat()))
-            a.led.event("Split", f"{SYMBOL} split {ratio:g}-for-1 ({timeutil.fmt_date(d)})",
+            a.db.x("UPDATE splits SET handled=1 WHERE symbol=? AND day=?", (symbol, d.isoformat()))
+            a.led.event("Split", f"{symbol} split {ratio:g}-for-1 ({timeutil.fmt_date(d)})",
                         ("Applied the standard adjustment: " if choice == "apply" else "Left for manual adjustment: ")
                         + ("; ".join(lines) or "nothing affected"), warning=choice != "apply")
 
@@ -439,7 +459,26 @@ class Startup:
                         a.db.x("INSERT OR REPLACE INTO prices(symbol,day,close) VALUES(?,?,?)", (SYMBOL, d, c))
             except Exception as e:  # noqa: BLE001
                 log.warning("daily closes: %s", e)
+            self._held_others(r)
         return f"${u['price']:.2f} · {len(ex)} expirations"
+
+    def _held_others(self, r):
+        """Shares you hold besides TQQQ: a fresh price and their daily closes since the run began, so account value and
+        any missed days are right. A symbol that fails is skipped (its last known price is used)."""
+        a = self.app
+        for s in [x for x in a.led.holdings() if x != SYMBOL]:
+            try:
+                a.led.set_price(s, a.quotes.symbol_quote(s, fresh=True)["last"])
+                start = dt.date.fromisoformat(r["start_day"]) - dt.timedelta(days=7)
+                have = a.db.val("SELECT MAX(day) FROM prices WHERE symbol=?", (s,))
+                if have:
+                    start = max(start, dt.date.fromisoformat(have) - dt.timedelta(days=3))
+                closes = a.provider.daily_closes(start, timeutil.today_ct(), symbol=s)
+                with a.db.tx():
+                    for d, c in closes.items():
+                        a.db.x("INSERT OR REPLACE INTO prices(symbol,day,close) VALUES(?,?,?)", (s, d, c))
+            except Exception as e:  # noqa: BLE001
+                log.warning("held symbol %s: %s", s, e)
 
     def _s_snapshot(self):
         a = self.app

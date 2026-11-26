@@ -131,10 +131,18 @@ class YahooProvider:
             raise DataError(f"Yahoo returned no price for {self.symbol}.")
         return {"price": price, "prev_close": prev, "bid": None, "ask": None, "asof": timeutil.iso()}
 
-    def stock_bidask(self):
+    def stock_bidask(self, symbol=None):
         """Share bid/ask (slower call; only used when a share ticket is open)."""
-        info = self._t().info
+        info = self._t(symbol).info
         return _num(info.get("bid")) or None, _num(info.get("ask")) or None
+
+    def symbol_quote(self, symbol):
+        """Last price and previous close for any symbol (v1.19.0)."""
+        fi = self._t(symbol).fast_info
+        price, prev = _num(fi["last_price"]), _num(fi["previous_close"])
+        if not price:
+            raise DataError(f"Yahoo returned no price for {symbol}.")
+        return {"price": price, "prev_close": prev, "asof": timeutil.iso()}
 
     def expirations(self):
         exps = list(self._t().options)
@@ -227,12 +235,12 @@ class YahooProvider:
                 log.warning("earnings history %s: %s", sym, e)
         return out
 
-    def dividends(self):
-        s = self._t().dividends
+    def dividends(self, symbol=None):
+        s = self._t(symbol).dividends
         return [(idx.date(), float(v)) for idx, v in s.items()] if s is not None else []
 
-    def splits(self):
-        s = self._t().splits
+    def splits(self, symbol=None):
+        s = self._t(symbol).splits
         return [(idx.date(), float(v)) for idx, v in s.items()] if s is not None else []
 
     def next_ex_dividend(self):
@@ -325,18 +333,26 @@ class DemoProvider:
                     k = (d - dt.date(2026, 1, 1)).days
                     out[d.isoformat()] = round(19 + 6 * math.sin(k / 17.0) + 2 * math.sin(k / 3.7), 2)
                 else:
-                    out[d.isoformat()] = self._price_on(d)
+                    out[d.isoformat()] = round(self._price_on(d) * self._scale(symbol), 2)
             d += dt.timedelta(days=1)
         return out
 
     def daily_bars(self, symbol, start, end):
         self._chk("daily_bars")
         out = []
-        for day, c in sorted(self.daily_closes(start, end).items()):
+        k = self._scale(symbol)
+        for day, c in sorted(self.daily_closes(start, end, symbol=symbol if symbol in ("^VIX", "^IRX") else None).items()):
+            c = round(c * k, 2)
             rnd = random.Random(dt.date.fromisoformat(day).toordinal() * 7)
             out.append({"day": day, "high": round(c * (1 + rnd.uniform(.005, .03)), 2),
                         "low": round(c * (1 - rnd.uniform(.005, .03)), 2), "close": c})
         return out
+
+    def _scale(self, symbol):
+        """Demo only: other symbols follow TQQQ's wiggle at their own price level, so charts differ."""
+        if not symbol or symbol == self.symbol or symbol in ("^VIX", "^IRX"):
+            return 1.0
+        return 0.6 + random.Random(symbol).uniform(0, 2.4)
 
     def fear_greed(self, start):
         self._chk("fear_greed")
@@ -395,18 +411,29 @@ class DemoProvider:
             out[sym] = sorted(ds)
         return out
 
-    def dividends(self):
+    def dividends(self, symbol=None):
         return []
 
-    def splits(self):
+    def splits(self, symbol=None):
         return []
 
     def next_ex_dividend(self):
         return None
 
-    def stock_bidask(self):
-        p = self.underlying()["price"]
+    def stock_bidask(self, symbol=None):
+        p = (self.symbol_quote(symbol) if symbol else self.underlying())["price"]
         return round(p - .01, 2), round(p + .01, 2)
+
+    def symbol_quote(self, symbol):
+        self._chk("underlying")
+        today, prev = timeutil.today_ct(), marketcal.prev_trading_day(timeutil.today_ct())
+        if symbol == self.symbol:
+            return {"price": self._price_on(today), "prev_close": self._price_on(prev), "asof": timeutil.iso()}
+        if symbol.startswith("ZZ"):      # demo: made-up tickers have no quote, like Yahoo
+            raise DataError(f"Yahoo returned no price for {symbol}.")
+        k = self._scale(symbol)
+        return {"price": round(self._price_on(today) * k, 2), "prev_close": round(self._price_on(prev) * k, 2),
+                "asof": timeutil.iso()}
 
     def irx(self, start, end):
         self._chk("irx")
@@ -505,6 +532,7 @@ class Quotes:
         self._chains = {}
         self._und = None
         self._exps = None
+        self._syms = {}
 
     # underlying ---------------------------------------------------------------------------------------
     def underlying(self, fresh=False):
@@ -640,6 +668,44 @@ class Quotes:
         return {"bid": bid, "ask": ask, "mid": round((bid + ask) / 2 + 1e-9, 2), "asof": u["asof"],
                 "stale": u.get("stale"), "last": u["price"]}
 
+    def symbol_quote(self, symbol, fresh=False):
+        """Quote for any symbol, shaped like share_quote() plus prev_close (v1.19.0). TQQQ uses its own path; others
+        are cached for a minute, and the last good quote is kept so a held symbol still has a price when Yahoo hiccups."""
+        if symbol == SYMBOL:
+            q = self.share_quote(fresh=fresh)
+            q["prev_close"] = (self._und or {}).get("prev_close")
+            return q
+        with self._lock:
+            c = self._syms.get(symbol)
+            if c and not fresh and time.time() - c["_t"] < self.CACHE_S:
+                return c
+        try:
+            u = self.p.symbol_quote(symbol)
+            bid = ask = None
+            if marketcal.is_open(timeutil.now()):
+                try:
+                    bid, ask = self.p.stock_bidask(symbol)
+                except Exception:  # noqa: BLE001
+                    pass
+            if not bid or not ask or ask < bid:
+                bid = ask = u["price"]
+            q = {"bid": bid, "ask": ask, "mid": round((bid + ask) / 2 + 1e-9, 2), "asof": u["asof"], "stale": False,
+                 "last": u["price"], "prev_close": u.get("prev_close"), "_t": time.time()}
+            self.db.x("INSERT OR REPLACE INTO quotes(contract,symbol,bid,ask,last,asof) VALUES(?,?,?,?,?,?)",
+                      ("_U_" + symbol, symbol, bid, ask, u["price"], u["asof"]))
+            self.db.x("INSERT OR REPLACE INTO prices(symbol,day,close) VALUES(?,?,?)",
+                      ("_last_" + symbol, timeutil.today_ct().isoformat(), u["price"]))
+        except Exception as e:  # noqa: BLE001
+            log.warning("quote %s failed: %s", symbol, e)
+            r = self.db.one("SELECT * FROM quotes WHERE contract=?", ("_U_" + symbol,))
+            if not r:
+                raise DataError(f"No price for {symbol}: {e}")
+            q = {"bid": r["bid"], "ask": r["ask"], "mid": round(r["last"], 2), "asof": r["asof"], "stale": True,
+                 "last": r["last"], "prev_close": c and c.get("prev_close"), "_t": time.time(), "error": str(e)}
+        with self._lock:
+            self._syms[symbol] = q
+        return q
+
     def is_too_old(self, asof_iso):
         """During market hours, quotes older than 15 minutes block trading until refreshed."""
         now = timeutil.now()
@@ -651,3 +717,4 @@ class Quotes:
         with self._lock:
             self._chains.clear()
             self._und = None
+            self._syms.clear()

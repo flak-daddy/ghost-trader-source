@@ -22,6 +22,7 @@ DEFAULTS = {
     "ind_ranges": {"px": "3M", "st": "3M", "mood": "3M", "vol": "3M"},  # Indicators range per chart group
     "ind_trades": False,     # Indicators: show your trades on the charts (v1.11.0)
     "out_range": "3M",       # Performance → readings vs. outcomes range
+    "watchlist": ["QQQ", "SPY", "SQQQ", "^GSPC", "^NDX", "^VIX"],   # tracked symbols (v1.14.0); see watch.py
 }
 
 

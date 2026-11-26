@@ -61,8 +61,15 @@ function renderHeader() {
   $("#acct").innerHTML = `
     <div><small>Account value</small><span class=lnk id="acctv" data-go="portfolio" data-tip="Double-click: go to Portfolio">${mc(b.account_value_c)}</span></div>
     <div><small>Collateral</small><span class=lnk data-go="portfolio:puts" data-tip="Double-click: show your open puts">${mc(b.collateral_c)}</span></div>
-    <div><small>Shares</small><span class=lnk data-go="portfolio:shares" data-tip="Double-click: go to your shares">${b.shares ? b.shares + " × $" + f2(S()) : "none"}</span></div>
+    <div><small>Shares</small><span class=lnk data-go="portfolio:shares" data-tip="Double-click: go to your shares">${holdTxt(b)}</span></div>
     <div><small>Data as of</small><span class=lnk data-go="report" data-tip="Double-click: startup report">${esc(st.data_asof || "—")}</span> <span class=pill>${esc(st.market.label)}</span></div>`;
+}
+/* What the header says about your shares: one holding as "400 × $52.56", several as a count and total (v1.19.0). */
+function holdTxt(b) {
+  const h = b.holdings || [];
+  if (!h.length) return "none";
+  if (h.length === 1) return h[0].shares + (h[0].symbol === "TQQQ" ? "" : " " + h[0].symbol) + " × $" + f2(h[0].price);
+  return h.length + " holdings · " + mc(b.shares_value_c);
 }
 const hov = $("#hovbox");
 document.addEventListener("mousemove", e => {
@@ -72,7 +79,7 @@ document.addEventListener("mousemove", e => {
     hov.innerHTML = `<div class="row tot"><span>Total account value</span><span>${mc(b.account_value_c)}</span></div>
       <div class=row><span class=meta>Available</span><span>${mc(b.available_c)}</span></div>
       <div class=row><span class=meta>Collateral</span><span>${mc(b.collateral_c)}</span></div>
-      <div class=row><span class=meta>Shares value <span style="opacity:.8">(${b.shares} × $${f2(S())})</span></span><span>${mc(b.shares_value_c)}</span></div>`;
+      <div class=row><span class=meta>Shares value <span style="opacity:.8">(${b.holdings.length > 1 ? b.holdings.length + " holdings" : b.shares + " × $" + f2(S())})</span></span><span>${mc(b.shares_value_c)}</span></div>`;
     hov.style.display = "block";
     hov.style.left = Math.min(e.clientX + 14, innerWidth - 310) + "px"; hov.style.top = (e.clientY + 18) + "px";
   } else hov.style.display = "none";
@@ -107,7 +114,7 @@ async function go(target) {
   else if (a === "perf") { ui.tab = "Performance"; ui.perfDay = b; }
   else if (a === "report") { showReport(); return; }
   else if (a === "help") { ui.tab = "Help"; ui.helpAt = b || null; }
-  else if (a === "ind") { ui.tab = "Indicators"; if (b) { ui.indPin = b; ui.indFlash = true; const need = rangeFor(b);
+  else if (a === "ind") { ui.tab = "Indicators"; if (ui.indSym !== "TQQQ") { ui.indSym = "TQQQ"; indData = null; } if (b) { ui.indPin = b; ui.indFlash = true; const need = rangeFor(b);
     ui.indRanges = Object.fromEntries(Object.entries(ui.indRanges).map(([g, r]) => [g, RDAYS[need] > RDAYS[r] ? need : r])); } }
   else if (a === "poshist") { ui.tab = "History"; ui.hFilter = hKeep.f; ui.hTag = hKeep.t; ui.hEvent = null;
     closeOverlay(); closeDrawer(); await render(); openPosPanel(+b); return; }
@@ -175,9 +182,9 @@ async function renderPortfolio() {
   const bar = ui.pfMode === "puts" ? `<div class=arrive><span><b>Showing open puts</b> <span class=meta>· ${plural(puts.length, "position")}, ${plural(puts.reduce((a, p) => a + p.open_qty, 0), "contract")} securing ${mc(b.collateral_c)}</span></span><button class=chip style="margin-left:auto" onclick="ui.pfMode=null;render()">Clear ${I("x")}</button></div>` : "";
   const cards = [["Account value", mc(av), `${mc(av - start, true)} (${(ret * 100).toFixed(2)}%)`], ["Available", mc(b.available_c), "spendable"],
     ["Collateral", mc(b.collateral_c), `${(b.collateral_c / av * 100 || 0).toFixed(1)}% of account · ${plural(puts.length, "put")}`],
-    ["Shares", mc(b.shares_value_c), b.shares ? `${b.shares} TQQQ · ${st.locked >= b.shares ? "all covering" : (b.shares - st.locked) + " free"}` : "none"],
+    ["Shares", mc(b.shares_value_c), !b.holdings.length ? "none" : b.holdings.length === 1 && b.shares ? `${b.shares} TQQQ · ${st.locked >= b.shares ? "all covering" : (b.shares - st.locked) + " free"}` : b.holdings.map(h => `${h.shares} ${h.symbol}`).join(" · ")],
     ["Premium collected", mc(st.premium_c), "this run"], ["Interest earned", mc(st.interest_c), `+${mc(b.accrued_c)} accrued${st.next_pay ? " · pays " + esc(st.next_pay) : ""}`]]
-    .map(([a, b2, c]) => `<div class=card><small>${a}</small><span class=big>${b2}</span><div class=meta>${c}</div></div>`).join("");
+    .map(([a, b2, c]) => `<div class=card><small>${a}</small><span class=big>${b2}</span><div class=meta>${c}</div>${a === "Shares" ? sharesBtns() : ""}</div>`).join("");
   const rows = st.positions.map(p => {
     const cls = ui.pfMode === "puts" ? (p.type === "put" && p.side === "short" ? "flash" : "dim") : (ui.flashPos === p.id ? "flash" : "");
     const cover = p.type === "put" && p.side === "short" ? mc(p.collateral_c) : p.side === "short" ? p.open_qty * 100 + " sh" : "—";
@@ -187,11 +194,13 @@ async function renderPortfolio() {
       <td>${p.dist == null ? "—" : Math.abs(p.dist * 100).toFixed(1) + "% " + (p.otm ? "OTM" : "ITM")}</td><td>${p.dte}</td>
       <td class="${pn >= 0 ? "up" : "down"}">${pn == null ? "—" : mc(pn, true)}</td><td class="${pn >= 0 ? "up" : "down"}">${p.pnl_pct == null ? "—" : pct(p.pnl_pct)}</td>
       <td><button class="btn small" onclick="openTicket({close:${p.id}})">Close</button></td></tr>`; }).join("") || `<tr><td colspan=10 class="l meta" style="padding:16px 8px">No open options. Click any price on the Chain to open a ticket.</td></tr>`;
-  const sh = st.bal.shares;
   const covering = st.positions.filter(p => p.type === "call" && p.side === "short").map(p => p.exp_label + " " + kTxt(p.strike) + " Call");
-  const lots = st.lots.map(l => `${l.open_qty} ${l.source === "assigned" ? "assigned" : l.source} ${esc(l.acquired)} @ ${f2(l.cost)}`).join(" · ");
-  const shRow = sh ? `<tr class="${ui.pfMode === "shares" ? "flash" : ""}"><td class=l>TQQQ shares<div class=meta>${lots}${covering.length ? ` · <span class=pill>${st.locked} covering ${esc(covering.join(", "))}</span>` : ""} · ${Math.max(0, sh - st.locked)} free</div></td><td>${sh}</td><td>${f2(st.avg_cost)}</td><td>${f2(S())}</td><td>${mc(b.shares_value_c)}</td><td class="${S() >= st.avg_cost ? "up" : "down"}">${money((S() - st.avg_cost) * sh, true)}</td><td class="${S() >= st.avg_cost ? "up" : "down"}">${pct((S() - st.avg_cost) / st.avg_cost)}</td><td><button class="btn small" onclick="openShares('sell_shares')">Sell</button></td></tr>`
-    : `<tr><td colspan=8 class="l meta" style="padding:16px 8px">No shares.</td></tr>`;
+  const shRow = (st.bal.holdings || []).map(h => {
+    const isT = h.symbol === "TQQQ", lots = st.lots.filter(l => l.symbol === h.symbol).map(l => `${l.open_qty} ${l.source === "assigned" ? "assigned" : l.source} ${esc(l.acquired)} @ ${f2(l.cost)}`).join(" · ");
+    const pnl = (h.price - h.avg_cost) * h.shares, free = Math.max(0, h.shares - h.locked), cls = pnl >= 0 ? "up" : "down";
+    const chg = h.chg == null ? "" : ` <span class="${h.chg >= 0 ? "up" : "down"}">${h.chg >= 0 ? "+" : "−"}${Math.abs(h.chg * 100).toFixed(2)}%</span>`;
+    return `<tr class="${ui.pfMode === "shares" ? "flash" : ""}"><td class=l>${esc(h.symbol)} shares<div class=meta>${lots}${isT && covering.length ? ` · <span class=pill>${st.locked} covering ${esc(covering.join(", "))}</span>` : ""} · ${free} free</div></td><td>${h.shares}</td><td>${f2(h.avg_cost)}</td><td>${f2(h.price)}${chg}</td><td>${mc(h.value_c)}</td><td class="${cls}">${money(pnl, true)}</td><td class="${cls}">${pct((h.price - h.avg_cost) / h.avg_cost)}</td><td><button class="btn small" onclick="openShares('buy_shares', '${esc(h.symbol)}')">Buy</button> <button class="btn small" ${free ? "" : "disabled"} onclick="openShares('sell_shares', '${esc(h.symbol)}')">Sell</button></td></tr>`; }).join("")
+    || `<tr><td colspan=8 class="l meta" style="padding:16px 8px">No shares.</td></tr>`;
   $("#main").innerHTML = `${bar}${alerts}<div class=cards style="margin-top:10px">${cards}</div>
     <div class=meta>Account value = cash + collateral + shares · interest counts once it's paid on the 15th · option buy-back prices not counted</div>
     <h2>Open options</h2><table><thead><tr><th class=l>Contract</th><th>Contracts</th><th>${st.positions.some(p => p.side === "long") ? "Opened at" : "Sold at"}</th><th>Mark</th><th>Collateral / cover</th><th>Distance</th><th>DTE</th><th>P&L</th><th>% of premium</th><th></th></tr></thead><tbody>${rows}</tbody></table>
@@ -305,6 +314,32 @@ function noteEditor(n) {
 }
 
 /* ---------- MARKET (v1.12.0) ---------- */
+/* The watchlist on the Market tab (v1.18.0): price, today's change and a small chart per tracked symbol. */
+let wlData = null;
+async function drawWatchlist(refresh) {
+  const [w, c] = await Promise.all([api("watchlist", refresh ? {refresh: true} : {}), api("watch_charts", refresh ? {refresh: true} : {})]);
+  wlData = {w, c}; drawWatchGrid();
+}
+function sparkSvg(rows, up) {
+  if (!rows || rows.length < 2) return `<div class=meta style="height:48px">no chart</div>`;
+  const W = 200, H = 48, v = rows.map(r => r[1]), lo = Math.min(...v), hi = Math.max(...v), N = v.length;
+  const X = i => i / (N - 1) * W, Y = x => hi === lo ? H / 2 : 3 + (1 - (x - lo) / (hi - lo)) * (H - 6);
+  const d = v.map((x, i) => (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(x).toFixed(1)).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height=48 preserveAspectRatio="none" style="display:block"><path d="${d}" fill="none" stroke="${up ? "var(--up)" : "var(--down)"}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
+}
+function drawWatchGrid() {
+  const g = $("#wlGrid"); if (!g || !wlData) return;
+  const {w, c} = wlData, R = ui.wlRange || "3M", cut = isoMinus(RDAYS[R]);
+  g.innerHTML = (w.error ? `<div class="alert w" style="grid-column:1/-1"><span class=ic>${I("warn")}</span><span>${esc(w.error)}. Showing the last quotes fetched.</span></div>` : "") +
+    (w.rows.map(r => {
+      const rows = (c.series[r.symbol] || []).filter(x => x[0] >= cut), pc = rows.length > 1 ? rows[rows.length - 1][1] / rows[0][1] - 1 : null;
+      const chg = r.chg == null ? "" : `<span class="${r.chg >= 0 ? "up" : "down"}">${r.chg >= 0 ? "+" : "−"}${Math.abs(r.chg * 100).toFixed(2)}%</span>`;
+      return `<div class="card wlcard" data-wsym="${esc(r.symbol)}" title="Open ${esc(r.symbol)} on Indicators"><div style="display:flex;justify-content:space-between;align-items:baseline"><b>${esc(r.symbol)}${r.index ? ' <span class=pill>index</span>' : ""}</b>${chg}</div>
+        <div class=meta style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.name)}</div>
+        <span class=big>${r.missing ? "—" : (r.index ? "" : "$") + f2(r.price)}</span>${sparkSvg(rows, pc == null || pc >= 0)}
+        <div class=meta>${pc == null ? "" : `${R}: <span class="${pc >= 0 ? "up" : "down"}">${pc >= 0 ? "+" : "−"}${Math.abs(pc * 100).toFixed(1)}%</span>`}</div></div>`; }).join("") || `<div class=meta>No symbols yet. Add some in Settings → Tracked symbols.</div>`);
+  $$("[data-wsym]").forEach(el => el.onclick = () => { ui.indSym = el.dataset.wsym; indData = null; ui.tab = "Indicators"; render(); });
+}
 async function renderMarket(refresh) {
   if (!ui.mkt || refresh || Date.now() - ui.mkt._t > 180e3) {
     if (!ui.mkt) $("#main").innerHTML = `<div class=meta style="padding:20px 0"><span class=spin>${I("spin")}</span> Getting the Nasdaq heavyweights…</div>`;
@@ -321,10 +356,14 @@ async function renderMarket(refresh) {
   $("#main").innerHTML = `<div class=bar style="margin-bottom:10px;justify-content:flex-end"><span class=meta>${m.asof ? "quotes " + esc(m.asof) + " · Yahoo, ~15 min delayed" : ""}</span><button class="btn small" id=mktRef>${I("refresh")} Refresh</button></div>
     ${m.error ? `<div class="alert w"><span class=ic>${I("warn")}</span><span>${esc(m.error)}. Showing the last quotes fetched.</span></div>` : ""}
     <div class=cards style="grid-template-columns:1fr 1fr 2fr">${tile(q, "the Nasdaq-100")}${tile(t, lev)}<div class="card mktsoon"><small>Coming up · next 7 days</small>${soon}</div></div>
+    <h2 style="display:flex;align-items:center;gap:10px">Your watchlist <span class="seg irng" id=wlRng>${["1M", "3M", "6M", "1Y"].map(r => `<button class="btn small ${(ui.wlRange || "3M") === r ? "on" : ""}" data-wr="${r}">${r}</button>`).join("")}</span><span class=meta style="font-weight:400">click a symbol for its indicators · add or remove symbols in Settings</span></h2>
+    <div id=wlGrid class=wlgrid><div class=meta><span class=spin>${I("spin")}</span> Getting your symbols…</div></div>
     <h2>Nasdaq heavyweights today</h2><div class=card style="padding:10px"><div id=heat></div><div class=meta style="margin-top:6px">Sized by market value · color by today's change (green up, red down, stronger = bigger move) · hover for details. These eight make up a large share of the Nasdaq-100, so they drive QQQ, and TQQQ moves about 3× QQQ each day.</div></div>
     <h2>Earnings and TQQQ</h2><div class=card style="padding:10px 12px">${earnTable(m.earnings)}</div>
     <div id=calendar></div>`;
   drawHeat($("#heat"), m.heavy);
+  drawWatchlist(refresh);
+  $$("[data-wr]").forEach(b => b.onclick = () => { ui.wlRange = b.dataset.wr; $$("[data-wr]").forEach(x => x.classList.toggle("on", x === b)); drawWatchGrid(); });
   $("#mktRef").onclick = async () => { $("#mktRef").innerHTML = `<span class=spin>${I("spin")}</span> Refreshing…`; await renderMarket(true); };
   renderCalendar();
 }
@@ -416,7 +455,18 @@ function openTicket(o) {
   tk.from = o.from || null;
   loadTicket(true);
 }
-function openShares(action) { tk = {action, qty: action === "sell_shares" ? Math.max(0, st.bal.shares - st.locked) || 100 : 100, price: null, note: "", tags: []}; tk.from = null; loadTicket(true); }
+/* Buy / Sell buttons on the Portfolio Shares tile (v1.13.2). Selling is limited to shares not covering a call. */
+function sharesBtns() {
+  const hold = st.bal.holdings || [], sellable = hold.find(h => h.shares - h.locked > 0), why = !hold.length ? "You don't hold any shares" : "All your shares are covering calls";
+  return `<div class=tilebtns><button class="btn small" id=shBuy onclick="openShares('buy_shares')">Buy</button>
+    <button class="btn small" id=shSell ${sellable ? "" : `disabled data-tip="${why}"`} onclick="openShares('sell_shares', '${sellable ? sellable.symbol : ""}')">Sell</button></div>`;
+}
+async function openShares(action, sym) {
+  sym = sym || "TQQQ";
+  if (!ui.wlSyms) { try { ui.wlSyms = (await api("watchlist")).rows.map(r => r.symbol); } catch (e) { ui.wlSyms = []; } }
+  const h = (st.bal.holdings || []).find(x => x.symbol === sym), free = h ? Math.max(0, h.shares - h.locked) : 0;
+  tk = {action, symbol: sym, qty: action === "sell_shares" ? free || 100 : 100, price: null, note: "", tags: []}; tk.from = null; loadTicket(true);
+}
 async function loadTicket(fresh) {
   const seq = ++tkSeq;
   document.body.classList.add("withDrawer");
@@ -430,9 +480,24 @@ async function loadTicket(fresh) {
 }
 function cancelTicket() { const f = tk && tk.from; tk = null; if (f && st.positions.some(p => p.id === f)) openPosPanel(f); else closeDrawer(); }
 function closeDrawer() { $("#drawer").innerHTML = ""; tk = null; document.body.classList.remove("withDrawer"); }
+/* The symbol row of a share ticket (v1.19.0): when selling, pick among what you hold; when buying, type any stock or ETF
+   (indexes can't be bought) or tap a symbol you track. */
+function symRow(d) {
+  const hold = (st.bal.holdings || []), cur = tk.symbol || "TQQQ";
+  if (tk.action === "sell_shares") return `<div class=row><label>Symbol</label><span class=seg>${hold.map(h => `<button class="btn small ${h.symbol === cur ? "on" : ""}" data-tsym="${esc(h.symbol)}">${esc(h.symbol)}</button>`).join("")}</span></div>`;
+  const quick = ["TQQQ", ...(ui.wlSyms || []).filter(s => s[0] !== "^")].filter((s, i, a) => a.indexOf(s) === i).slice(0, 8);
+  return `<div class=row><label>Symbol</label><span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><input id=tkSym value="${esc(cur)}" style="width:90px;text-transform:uppercase" maxlength=11 placeholder="e.g. SPY"> <button class="btn small" id=tkSymGo>Use</button></span></div>
+    <div class=row><label></label><span class=seg style="flex-wrap:wrap">${quick.map(s => `<button class="btn small ${s === cur ? "on" : ""}" data-tsym="${esc(s)}">${esc(s)}</button>`).join("")}</span></div>`;
+}
+function setTkSymbol(s) {
+  s = (s || "").trim().toUpperCase(); if (!s || s === tk.symbol) return;
+  tk.symbol = s; tk.price = null;
+  if (tk.action === "sell_shares") { const h = (st.bal.holdings || []).find(x => x.symbol === s); tk.qty = h ? Math.max(1, h.shares - h.locked) : 1; }
+  loadTicket(true);
+}
 function renderTicket() {
   const d = tkData, q = d.quote || {}, c = d.check, ef = d.effects || {}, isShares = tk.action.endsWith("shares"), isClose = !!tk.position_id;
-  const titles = {sell_to_open: "Sell to open", buy_to_open: "Buy to open", buy_to_close: "Buy to close", sell_to_close: "Sell to close", buy_shares: "Buy TQQQ shares", sell_shares: "Sell TQQQ shares"};
+  const titles = {sell_to_open: "Sell to open", buy_to_open: "Buy to open", buy_to_close: "Buy to close", sell_to_close: "Sell to close", buy_shares: `Buy ${tk.symbol || "TQQQ"} shares`, sell_shares: `Sell ${tk.symbol || "TQQQ"} shares`};
   const qtxt = d.market.open && !q.stale ? `quotes as of ${esc(d.quote_txt || "")}` : `quotes from the ${esc((d.market.close_txt || "").replace(/ \(.*\)/, ""))} close (stale${d.market.open ? "" : ", market closed"})`;
   let contract = "", cmp = "", effects = "";
   if (!isShares) {
@@ -477,10 +542,11 @@ function renderTicket() {
   if (keepY) queueMicrotask(() => { const el = $("#drawer .drawer"); if (el) el.scrollTop = keepY; });
   $("#drawer").innerHTML = `<div class=drawer>
     <div style="display:flex;justify-content:space-between"><span><b style="font-size:15px">${titles[tk.action]}</b>${helpFor(tk)}</span><button class="btn small" onclick="cancelTicket()">${tk.from ? "Back" : "Close"} <span class=kbd>Esc</span></button></div>
-    <div class=meta>TQQQ ${f2(d.price)} · ${qtxt} <span class=lnk style="color:var(--accent)" id=tkRef>${I("refresh")} Refresh quote</span></div>
+    <div class=meta>${esc(d.symbol || "TQQQ")} ${f2(isShares && d.sym_price != null ? d.sym_price : d.price)}${isShares && d.sym_prev ? ` <span class="${d.sym_price >= d.sym_prev ? "up" : "down"}">${d.sym_price >= d.sym_prev ? "+" : "−"}${Math.abs((d.sym_price / d.sym_prev - 1) * 100).toFixed(2)}%</span>` : ""} · ${qtxt} <span class=lnk style="color:var(--accent)" id=tkRef>${I("refresh")} Refresh quote</span></div>
     ${isClose ? `<div style="margin:8px 0 2px;font-weight:600">${esc(st.positions.find(p => p.id === tk.position_id)?.label || "")}</div>` : ""}
     ${contract}
-    ${isShares ? `<div class=meta style="text-align:right">Bid ${f2(q.bid)} · Ask ${f2(q.ask)}${!d.market.open ? " · market closed: the last price" : ""}</div>` : ""}
+    ${isShares ? symRow(d) : ""}
+    ${isShares ? `<div class=meta style="text-align:right">Bid ${f2(q.bid)} · Ask ${f2(q.ask)}${!d.market.open ? " · market closed: the last price" : ""}${tk.action === "sell_shares" ? ` · you hold ${d.held}${d.free !== d.held ? `, ${d.free} free` : ""}` : ""}</div>` : ""}
     <div class=row><label>${isShares ? "Shares" : "Contracts"}</label><input id=tkQ value="${esc(tk.qty)}" style="width:80px" inputmode=numeric><label>Fill price</label><input id=tkPx value="${esc(tk.price ?? "")}" style="width:80px" class="${priceBad ? "bad" : ""}"></div>
     <div class=meta style="text-align:right">Allowed: ${f2(q.bid)} (bid) – ${f2(q.ask)} (ask)</div>
     ${effects}
@@ -501,6 +567,8 @@ function renderTicket() {
   $$("[data-ck]").forEach(r => r.onclick = () => { tk.strike = +r.dataset.ck; re(); });
   $$("[data-rmtag]").forEach(x => x.onclick = () => { tk.tags = tk.tags.filter(t => t !== x.dataset.rmtag); renderTicket(); });
   $("#tkQ").onchange = e => { tk.qty = e.target.value; loadTicket(false); };
+  $$("[data-tsym]").forEach(b => b.onclick = () => setTkSymbol(b.dataset.tsym));
+  if ($("#tkSymGo")) { $("#tkSymGo").onclick = () => setTkSymbol($("#tkSym").value); $("#tkSym").onkeydown = e => { if (e.key === "Enter") setTkSymbol($("#tkSym").value); }; }
   $("#tkPx").onchange = e => { tk.price = e.target.value; loadTicket(false); };
   $("#tkRef").onclick = () => { tk.price = null; loadTicket(true); };
   const n = $("#tkNote"); if (n) n.oninput = () => tk.note = n.value;
@@ -659,7 +727,7 @@ function layersCard(d, sel, label) {
     ser[k].forEach((v, i) => { if (v == null) { pen = false; return; } dpath += (pen ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1); pen = true; });
     return `<path d="${dpath}" fill="none" stroke="${col}" stroke-width="${k === "px" ? 2.4 : 1.8}" stroke-linejoin="round" vector-effect="non-scaling-stroke" opacity="${k === "px" ? 1 : .92}"/>`; }).join("");
   const rseg2 = `<span class="seg irng">${RANGES.map(r => `<button class="btn small ${R === r ? "on" : ""}" data-lr="${r}">${r}</button>`).join("")}</span>`;
-  const chips = LAYERS.map(([k, name, col]) => `<button class="lchip ${on[k] ? "on" : ""}" data-ly="${k}" aria-pressed="${!!on[k]}"><i style="background:${col}"></i>${name}</button>`).join("");
+  const chips = LAYERS.map(([k, name, col]) => `<button class="lchip ${on[k] ? "on" : ""}" data-ly="${k}" aria-pressed="${!!on[k]}"><i style="background:${col}"></i>${k === "px" ? esc(d.symbol || "TQQQ") + " price" : name}</button>`).join("");
   const stabs = `<div class=stabs role=tablist>${d.lookbacks.map(String).map(k => `<button role=tab class="${k === ui.indN ? "on" : ""}" data-in="${k}">${label(k)}</button>`).join("")}</div>`;
   return `<div class="card igroup layers" style="margin-top:12px;position:relative">
     <div class="gtitle gflex"><span>Layers <span class=meta style="text-transform:none;letter-spacing:0;margin-left:10px">price and the VIX are scaled to the range so every curve fits; hover for the real values</span></span>${rseg2}</div>
@@ -678,19 +746,21 @@ function wireLayers(d, sel) {
   wrap.onmousemove = e => { const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * W;
     const i = Math.max(0, Math.min(N - 1, Math.round((x - L) / (W - L - Rr) * (N - 1)))); if (!N) return;
     const xx = L + (N <= 1 ? 0 : i / (N - 1) * (W - L - Rr)); cur.setAttribute("x1", xx); cur.setAttribute("x2", xx); cur.style.display = "";
-    tip.innerHTML = `<b>${fmtDay(days[i])}</b>` + LAYERS.filter(l => ui.indLayerOn[l[0]]).map(([k, name, col]) => `<div><span style="color:${col}">●</span> ${name} <b>${raw[k][i] == null ? "—" : fmt[k](raw[k][i])}</b></div>`).join("");
+    tip.innerHTML = `<b>${fmtDay(days[i])}</b>` + LAYERS.filter(l => ui.indLayerOn[l[0]]).map(([k, name, col]) => `<div><span style="color:${col}">●</span> ${k === "px" ? d.symbol || "TQQQ" : name.replace(/ price$/, "")} <b>${raw[k][i] == null ? "—" : fmt[k](raw[k][i])}</b></div>`).join("");
     tip.style.display = "block"; const lx = (xx / W) * r.width; tip.style.left = (lx > r.width - 190 ? lx - 180 : lx + 12) + "px"; tip.style.top = "10px"; };
   wrap.onmouseleave = () => { tip.style.display = "none"; cur.style.display = "none"; };
 }
 async function renderIndicators(refresh) {
   if (!indData || refresh) {
-    if (!indData) $("#main").innerHTML = `<div class=meta style="padding:20px 0"><span class=spin>${I("spin")}</span> Getting TQQQ, the VIX and Fear & Greed…</div>`;
-    const dd = await api("indicators", {refresh: !!refresh});
+    if (!indData) $("#main").innerHTML = `<div class=meta style="padding:20px 0"><span class=spin>${I("spin")}</span> Getting ${esc(ui.indSym || "TQQQ")}, the VIX and Fear & Greed…</div>`;
+    const dd = await api("indicators", {refresh: !!refresh, symbol: ui.indSym || "TQQQ"});
+    if (dd.error && ui.indSym && ui.indSym !== "TQQQ") { ui.indSym = "TQQQ"; indData = null; return renderIndicators(); }
     if (dd.error) { $("#main").innerHTML = `<div class="alert e"><span class=ic>${I("alert")}</span><span>${esc(dd.error)}</span></div>`; return; }
     indData = dd;
   }
   if (ui.tab !== "Indicators") return;
   const d = indData, nw = d.now, n = ui.indN, NN = d.days.length, sel = d.stoch[n] || {k: [], d: null};
+  const SYM = d.symbol || "TQQQ", isT = SYM === "TQQQ";   // implied volatility and your trades exist for TQQQ only
   const R = ui.indRanges;
   const startIdx = r => { const cut = isoMinus(RDAYS[r]); const i = d.days.findIndex(x => x >= cut); return i < 0 ? NN : i; };
   const G = {px: startIdx(R.px), st: startIdx(R.st), mood: startIdx(R.mood), vol: startIdx(R.vol || "3M")};
@@ -699,16 +769,16 @@ async function renderIndicators(refresh) {
   const tradeMarks = (g, diamond) => !ui.indTrades ? [] : d.days.map((day, i) => [day, i]).filter(([day, i]) => i >= G[g] && d.trades[day])
     .map(([day, i]) => { const ks = d.trades[day].map(t => t.kind); const k = ["assign", "open", "close", "expire"].find(x => ks.includes(x)); return {i: i - G[g], color: TCOL[k], diamond}; });
   const cnt = g => NN - G[g], sl = (a, g) => a ? a.slice(G[g]) : null;
-  const names = {tqqq: "TQQQ prices (Yahoo)", vix: "the VIX (Yahoo)", fg: "Fear & Greed (CNN)"};
+  const names = {tqqq: SYM + " prices (Yahoo)", vix: "the VIX (Yahoo)", fg: "Fear & Greed (CNN)"};
   const alerts = Object.entries(d.status).filter(([, s]) => !s.ok).map(([k, s]) => `<div class="alert w"><span class=ic>${I("warn")}</span><span><b>Couldn't get ${names[k]}:</b> ${esc(s.error || "no data")}. ${s.at ? `Showing what was fetched ${esc(s.at_txt)}.` : "It'll show here once it's available."}${k === "fg" ? " CNN has no official feed, so its site changing can break this." : ""}</span></div>`).join("");
   const label = k => k === "14" ? "14,3,3" : k + "-day";
   const srows = d.lookbacks.map(String).map(k => { const c = nw.stoch[k] || {};
     return `<tr><td class=l>${label(k)}</td><td><b>${r0(c.k)}</b>${c.d != null ? `<span class=meta> / ${r0(c.d)}</span>` : ""}</td><td>${c.k != null && c.k_prev != null ? `<span class="${c.k >= c.k_prev ? "up" : "down"}">${c.k >= c.k_prev ? "▲" : "▼"}</span>` : ""}</td><td class="l meta">${zone(c.k)}</td></tr>`; }).join("");
   const fg = nw.fg || {}, tint = fgTint(fg.score);
   const cards = `<div class="cards itiles" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
-    <div class=card><small>TQQQ</small><span class=big>${nw.price == null ? "—" : "$" + f2(nw.price)}</span><div class=meta>${chg(nw.price, nw.prev)} vs. prior day · bars through ${nw.bars_through ? esc(fmtDay(nw.bars_through)) : "—"}</div></div>
+    <div class=card><small>${esc(SYM)}</small><span class=big>${nw.price == null ? "—" : (SYM[0] === "^" ? "" : "$") + f2(nw.price)}</span><div class=meta>${chg(nw.price, nw.prev)} vs. prior day · bars through ${nw.bars_through ? esc(fmtDay(nw.bars_through)) : "—"}</div></div>
     <div class="card stile"><small>Stochastic (%K${nw.stoch["14"] && nw.stoch["14"].d != null ? " / %D" : ""})</small><table class="mini istoch"><tbody>${srows}</tbody></table></div>
-    ${ivTile(d.ivnow)}
+    ${isT ? ivTile(d.ivnow) : ""}
     <div class=card><div class=thead>VIX = ${nw.vix == null ? "—" : f2(nw.vix)}</div><div class=meta>${chg(nw.vix, nw.vix_prev)} vs. prior close${nw.vix_lo != null ? ` · 1-year range ${f2(nw.vix_lo)}–${f2(nw.vix_hi)}` : ""}</div></div>
     <div class=card ${tint ? `style="background:${tint.bg};border-color:${tint.bd}"` : ""}><div class=thead>Fear &amp; Greed ${fg.score == null ? "unavailable" : `is at ${Math.round(fg.score)} <span class=pill>${esc(fg.rating || fgName(fg.score))}</span>`}</div>
       <div class=meta>${[["prior close", fg.previous_close], ["1 week", fg.week_ago], ["1 month", fg.month_ago], ["1 year", fg.year_ago]].filter(x => x[1] != null).map(([a, v]) => `${a} ${Math.round(v)}`).join(" · ")}</div></div></div>`;
@@ -717,10 +787,11 @@ async function renderIndicators(refresh) {
   const stochTabs = `<div class=stabs role=tablist>${d.lookbacks.map(String).map(k => `<button role=tab class="${k === n ? "on" : ""}" data-in="${k}">${label(k)}</button>`).join("")}<span class=srng>${rseg(ui.indTable ? "px" : "st")}</span></div>`;
   const nTr = Object.keys(d.trades || {}).length;
   const bar = `<div class=bar style="margin-bottom:10px;justify-content:flex-end">
-    <span class=meta data-tip="Your trades this run, drawn on the charts: ◆ on the price chart, a faint line on the others (blue opened, gray closed, amber assigned or called away, green expired worthless). Hover a day to see them.">Your trades</span>${seg([["0", "Off"], ["1", "On"]], ui.indTrades ? "1" : "0", "data-itr")}
+    ${isT ? `<span class=meta data-tip="Your trades this run, drawn on the charts: ◆ on the price chart, a faint line on the others (blue opened, gray closed, amber assigned or called away, green expired worthless). Hover a day to see them.">Your trades</span>${seg([["0", "Off"], ["1", "On"]], ui.indTrades ? "1" : "0", "data-itr")}` : ""}
     ${seg([["layers", "Layers"], ["stacked", "Stacked"]], ui.indLayers === false ? "stacked" : "layers", "data-il")}
     ${seg([["chart", "Chart"], ["table", "Table"]], ui.indTable ? "table" : "chart", "data-iv")}
     <button class="btn small" id=indRef>${I("refresh")} Refresh</button></div>`;
+  const symBar = (d.symbols || []).length > 1 ? `<div class=bar style="margin-bottom:8px;gap:6px;flex-wrap:wrap"><span class=meta>Symbol</span><span class=seg>${d.symbols.map(s => `<button class="btn small ${s === SYM ? "on" : ""}" data-isym="${esc(s)}">${esc(s)}</button>`).join("")}</span>${isT ? "" : `<span class=meta>implied volatility and your trades are TQQQ-only</span>`}</div>` : "";
   const pctv = a => a ? a.map(x => x == null ? null : x * 100) : a;
   const volGroup = () => {
     const iv = pctv(sl(d.iv, "vol")), hv = pctv(sl(d.hv, "vol")), vals = [...iv, ...hv].filter(x => x != null);
@@ -728,6 +799,9 @@ async function renderIndicators(refresh) {
     const lo = vals.length ? Math.min(...vals) : 30, hi = vals.length ? Math.max(...vals) : 100, pd = Math.max((hi - lo) * .1, 3);
     const tk = niceTicks(Math.max(0, lo - pd), hi + pd, 4);
     const leg = `<span class=ileg><svg width=22 height=8><line x1=0 x2=22 y1=4 y2=4 stroke="var(--s1)" stroke-width=2 /></svg>Implied <svg width=22 height=8><line x1=0 x2=22 y1=4 y2=4 stroke="var(--s2)" stroke-width=2 stroke-dasharray="5 4"/></svg>Realized</span>`;
+    if (!isT) return `<div class="card igroup" style="margin-top:12px"><div class="gtitle gflex">Volatility${rseg("vol")}</div>
+      ${ichart({g: "vol", title: "Realized volatility", sub: "last 30 trading days, annualized · implied volatility is saved for TQQQ only", h: 170, lo: tk[0], hi: tk[tk.length - 1], ticks: tk, tfmt: t => t + "%", efmt: v => v.toFixed(0) + "%",
+        series: [{v: hv, color: "var(--s2)", dash: true, name: "real."}], marks: []}, cnt("vol"), sl(d.days, "vol"))}</div>`;
     return `<div class="card igroup" style="margin-top:12px"><div class="gtitle gflex">Volatility${rseg("vol")}</div>
       ${ichart({g: "vol", title: "Implied vs. realized", legend: leg, sub: "TQQQ 30-day at-the-money IV (saved daily since v1.9.0) · realized = last 30 trading days, annualized", h: 170, lo: tk[0], hi: tk[tk.length - 1], ticks: tk, tfmt: t => t + "%", efmt: v => v.toFixed(0) + "%",
         series: [{v: iv, color: "var(--s1)", name: "IV"}, {v: hv, color: "var(--s2)", dash: true, name: "real."}], marks: tradeMarks("vol")}, cnt("vol"), sl(d.days, "vol"))}
@@ -735,11 +809,11 @@ async function renderIndicators(refresh) {
       <div class=volnow id=volNow><div class=meta style="padding:10px 0"><span class=spin>${I("spin")}</span> Reading IV across expirations and strikes…</div></div></div>`;
   };
   let body;
-  if (!NN) body = `<div class=empty>No TQQQ price history yet.</div>`;
+  if (!NN) body = `<div class=empty>No ${esc(SYM)} price history yet.</div>`;
   else if (ui.indTable) {
     const i0 = G.px;
     const rows = d.days.slice(i0).map((day, j) => { const i = i0 + j; return `<tr><td class=l>${esc(fmtDay(day))}</td><td>${f2(d.close[i])}</td><td>${r0(sel.k[i])}</td>${sel.d ? `<td>${r0(sel.d[i])}</td>` : ""}<td>${d.vix[i] == null ? "—" : f2(d.vix[i])}</td><td>${r0(d.fg[i])}</td><td class="l meta">${d.fg[i] == null ? "" : fgName(d.fg[i])}</td><td>${d.iv[i] == null ? "—" : (d.iv[i] * 100).toFixed(0) + "%"}</td><td>${d.hv[i] == null ? "—" : (d.hv[i] * 100).toFixed(0) + "%"}</td>${ui.indTrades ? `<td class="l meta">${(d.trades[day] || []).map(t => esc(t.text)).join("<br>")}</td>` : ""}</tr>`; }).reverse().join("");
-    body = `<div class="stochpanel tblmode" style="margin-top:12px">${stochTabs}</div><div class=meta style="margin:6px 2px">The tabs pick the stochastic column; the range picks the dates.</div><div class=chainbox style="max-height:60vh"><table class=both><thead><tr><th class=l>Date</th><th>TQQQ close</th><th>Stoch ${label(n)} %K</th>${sel.d ? "<th>%D</th>" : ""}<th>VIX</th><th>Fear &amp; Greed</th><th></th><th>IV</th><th>Realized</th>${ui.indTrades ? "<th class=l>Your trades</th>" : ""}</tr></thead><tbody>${rows}</tbody></table></div>`;
+    body = `<div class="stochpanel tblmode" style="margin-top:12px">${stochTabs}</div><div class=meta style="margin:6px 2px">The tabs pick the stochastic column; the range picks the dates.</div><div class=chainbox style="max-height:60vh"><table class=both><thead><tr><th class=l>Date</th><th>${esc(SYM)} close</th><th>Stoch ${label(n)} %K</th>${sel.d ? "<th>%D</th>" : ""}<th>VIX</th><th>Fear &amp; Greed</th><th></th><th>IV</th><th>Realized</th>${ui.indTrades ? "<th class=l>Your trades</th>" : ""}</tr></thead><tbody>${rows}</tbody></table></div>`;
   } else if (ui.indLayers !== false) {
     body = `<div class=ichartbox id=ichartbox style="position:relative">${layersCard(d, sel, label)}${volGroup()}<div class=itip id=itip></div></div>`;
   } else {
@@ -749,7 +823,7 @@ async function renderIndicators(refresh) {
     const leg = sel.d ? `<span class=ileg><svg width=22 height=8><line x1=0 x2=22 y1=4 y2=4 stroke="var(--s1)" stroke-width=2 /></svg>%K <svg width=22 height=8><line x1=0 x2=22 y1=4 y2=4 stroke="var(--s2)" stroke-width=2 stroke-dasharray="5 4"/></svg>%D</span>` : "";
     const sk = sl(sel.k, "st"), sd = sl(sel.d, "st");
     body = `<div class=ichartbox id=ichartbox style="position:relative;margin-top:12px">
-      <div class="card igroup"><div class=gtitle>TQQQ</div>
+      <div class="card igroup"><div class=gtitle>${esc(SYM)}</div>
       ${ichart({g: "px", title: "Price", ctl: rseg("px"), sub: "daily close", h: 190, lo: ct[0], hi: ct[ct.length - 1], ticks: ct, tfmt: t => "$" + t, efmt: v => "$" + v.toFixed(2), series: [{v: sl(d.close, "px"), color: "var(--s1)"}], marks: tradeMarks("px", true)}, cnt("px"), sl(d.days, "px"))}
       <div class=stochpanel>${stochTabs}
       ${ichart({g: "st", title: "Stochastic", legend: leg, sub: sel.d ? "%K smoothed 3 · %D = 3-day average of %K · 80 / 20 lines" : `raw %K over ${n} trading days · 80 / 20 lines`, h: 170, lo: 0, hi: 100, ticks: [0, 20, 50, 80, 100], refs: [{y: 80}, {y: 20}], efmt: v => Math.round(v), series: sel.d ? [{v: sk, color: "var(--s1)", name: "%K"}, {v: sd, color: "var(--s2)", dash: true, name: "%D"}] : [{v: sk, color: "var(--s1)"}], marks: tradeMarks("st")}, cnt("st"), sl(d.days, "st"))}</div></div>
@@ -759,8 +833,9 @@ async function renderIndicators(refresh) {
       ${volGroup()}
       <div class=itip id=itip></div></div>`;
   }
-  $("#main").innerHTML = `${alerts}${bar}${cards}${body}
-    <div class=meta style="margin-top:8px">TQQQ and the VIX from Yahoo (~15 min delayed) · Fear &amp; Greed from CNN's site (unofficial) · readings are saved with each trade you place · <span class="lnk helplink" style="margin:0" onclick="go('help:indicators')">How these work ↗</span></div>`;
+  $("#main").innerHTML = `${alerts}${symBar}${bar}${cards}${body}
+    <div class=meta style="margin-top:8px">${esc(SYM)} and the VIX from Yahoo (~15 min delayed) · Fear &amp; Greed from CNN's site (unofficial) · readings are saved with each trade you place · <span class="lnk helplink" style="margin:0" onclick="go('help:indicators')">How these work ↗</span></div>`;
+  $$("[data-isym]").forEach(b => b.onclick = () => { ui.indSym = b.dataset.isym; indData = null; renderIndicators(); });
   $$("[data-in]").forEach(b => b.onclick = () => { ui.indN = b.dataset.in; renderIndicators(); });
   $$("[data-rg]").forEach(b => b.onclick = () => { const [g, r] = b.dataset.rg.split(":"); ui.indRanges = {...ui.indRanges, [g]: r};
     api("settings_set", {ind_ranges: {[g]: r}}); renderIndicators(); });
@@ -1160,7 +1235,7 @@ async function lotPanel(id) {
   const L = s.lot;
   const tl = s.timeline.map(t => `<div><b>${esc(t.when)}</b> · ${esc(t.text)} ${t.amt_c ? `<span class=up>${mc(t.amt_c, true)}</span>` : ""}${t.note ? `<div class=meta>“${esc(t.note)}”</div>` : ""}</div>`).join("");
   const now = s.held ? `<div><b>Now</b> · Still held at $${f2(s.today.price)}<div class=meta>${s.open_calls.length ? esc(s.open_calls.join(", ")) + " open" : "not covered"}</div></div>` : "";
-  return `<div class=side><div style="display:flex;justify-content:space-between"><b style="font-size:15px">Share lot: ${L.qty} TQQQ</b><button class="btn small" onclick="ui.lot=null;render()">Close <span class=kbd>Esc</span></button></div>
+  return `<div class=side><div style="display:flex;justify-content:space-between"><b style="font-size:15px">Share lot: ${L.qty} ${esc(L.symbol || "TQQQ")}</b><button class="btn small" onclick="ui.lot=null;render()">Close <span class=kbd>Esc</span></button></div>
   <div class=meta>${L.source === "assigned" ? "Assigned" : L.source[0].toUpperCase() + L.source.slice(1)} ${esc(L.acquired)} · ${s.held ? "still held" : "closed"}${s.tags.length ? " · tags " + s.tags.map(t => tagHtml(t)).join("") : ""}</div>
   <div class=tl>${tl}${now}</div>
   <table class=mini><tbody><tr><td class=l>Premium from this lot</td><td class="${s.premium_c >= 0 ? "up" : "down"}">${mc(s.premium_c, true)}</td></tr><tr><td class=l>Interest on its collateral (est.)</td><td class=up>${mc(s.interest_c, true)}</td></tr>
@@ -1313,6 +1388,26 @@ function renderAlertRules(a, save) {
   };
   draw();
 }
+/* Tracked symbols in Settings (v1.17.0): price and today's change per symbol; add and remove. Indexes are tracked only. */
+async function renderWatchSettings(refresh) {
+  const box = $("#wlBody"); if (!box) return;
+  const w = await api("watchlist", refresh ? {refresh: true} : {});
+  const row = r => {
+    const chg = r.chg == null ? "" : `<span class="${r.chg >= 0 ? "up" : "down"}">${r.chg >= 0 ? "+" : ""}${(r.chg * 100).toFixed(2)}%</span>`;
+    return `<div class=row><label><b>${esc(r.symbol)}</b>${r.index ? ' <span class=pill>index</span>' : ""}<div class=meta>${esc(r.name)}</div></label>
+      <span>${r.missing ? '<span class=warn>no quote</span>' : `${f2(r.price)} ${chg}`} <button class="btn small" data-wlrm="${esc(r.symbol)}" title="Remove ${esc(r.symbol)}">${I("x")}</button></span></div>`;
+  };
+  box.className = "";
+  box.innerHTML = (w.rows.map(row).join("") || '<div class=meta>No symbols yet.</div>') +
+    `<div class=row><label>Add a symbol</label><span><input id=wlAdd placeholder="e.g. IWM or ^RUT" style="width:130px" maxlength=11> <button class="btn small" id=wlAddBtn>Add</button></span></div>
+     <div class=row><label></label><span class=meta>${w.error ? `<span class=warn>${esc(w.error)}</span> ` : ""}Indexes (start with ^) are tracked only. Prices from Yahoo${w.asof ? ", " + esc(w.asof) : ""}. <span class=lnk style="color:var(--accent)" id=wlRef>Refresh</span></span></div>`;
+  const add = async () => { const v = $("#wlAdd").value.trim(); if (!v) return; const r = await api("watch_add", {symbol: v}); if (r.error) toast(esc(r.error), 5000); else toast(`${I("check")} Added ${esc(r.symbol)}`); renderWatchSettings(); };
+  $("#wlAddBtn").onclick = add;
+  $("#wlAdd").onkeydown = e => { if (e.key === "Enter") add(); };
+  $("#wlRef").onclick = () => renderWatchSettings(true);
+  $$("[data-wlrm]").forEach(b => b.onclick = async () => { const r = await api("watch_remove", {symbol: b.dataset.wlrm}); if (r.error) toast(esc(r.error)); renderWatchSettings(); });
+}
+
 async function renderSettings() {
   const s = await api("settings"), cfg = s.settings;
   const fontOk = document.fonts.check('14px "GT Inter"');
@@ -1342,6 +1437,7 @@ async function renderSettings() {
     <div class=row><label>Rules</label><span class=meta>covered calls and cash-secured puts only</span></div>
     <div class=row><label>Sizing warning</label><span class=meta>collateral above 80% of account</span></div>
     <div class=row><label>Fees</label><span class=meta>none</span></div></div>
+  <div class=card id=wlCard><h2 style="margin-top:0">Tracked symbols</h2><div id=wlBody class=meta>Loading…</div></div>
   <div class=card><h2 style="margin-top:0">Appearance</h2>
     <div class=row><label>Theme</label><span class=seg>${["light", "dark", "system"].map(t => `<button class="btn small ${ui.theme === t ? "on" : ""}" data-th="${t}">${t === "system" ? "Match system" : t[0].toUpperCase() + t.slice(1)}</button>`).join("")}</span></div>
     <div class=row><label>Times</label><span class=meta>Central, with Eastern in parentheses (Central only in tickets)</span></div>
@@ -1378,6 +1474,7 @@ async function renderSettings() {
   $$("[data-eod]").forEach(b => b.onclick = async () => { await save({eod_summary: b.dataset.eod === "1"}); render(); });
   $("#testEod").onclick = async () => { const r = await api("test_notify", {kind: "eod"}); toast((r.ok ? I("check") + " " : I("x") + " ") + esc(r.msg), 5000); };
   renderAlertRules(s.alerts, save);
+  renderWatchSettings();
   $("#testNotify").onclick = async () => { const r = await api("test_notify"); toast((r.ok ? I("check") + " " : I("x") + " ") + esc(r.msg), 5000); };
   $("#tagMgr").onclick = () => showTags(s.tags);
   if ($("#closeRunBtn")) $("#closeRunBtn").onclick = closeRun;

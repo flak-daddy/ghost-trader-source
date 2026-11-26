@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import SYMBOL, __version__, alerts, config, csvout, db as dbm, events, indicators, ivhist, manual, marketcal, notify, perf, timeutil, wheel
+from . import SYMBOL, __version__, alerts, config, csvout, db as dbm, events, indicators, ivhist, manual, marketcal, notify, perf, timeutil, watch, wheel
 from .ledger import Ledger, TradeError, cents, money, strike_txt
 from .market import DemoProvider, Quotes, Rates, YahooProvider, ncdf
 from .startup import Startup
@@ -81,7 +81,20 @@ class App:
                 pass
         return out
 
+    def _sync_held(self):
+        """Keep the ledger's prices for held non-TQQQ symbols current (cached a minute), so account value is right."""
+        try:
+            held = [s for s in self.led.holdings() if s != SYMBOL]
+        except Exception:  # noqa: BLE001
+            return
+        for s in held:
+            try:
+                self.led.set_price(s, self.quotes.symbol_quote(s)["last"])
+            except Exception as e:  # noqa: BLE001
+                log.warning("held price %s: %s", s, e)
+
     def price(self):
+        self._sync_held()
         try:
             return self.quotes.underlying()["price"]
         except Exception:  # noqa: BLE001
@@ -188,6 +201,14 @@ class App:
         lots = [dict(lt) for lt in self.led.lots()]
         for lt in lots:
             lt["acquired"] = timeutil.fmt_date(lt["acquired_day"])
+        for h in b["holdings"]:       # day change for the symbols besides TQQQ
+            h["prev"] = h["chg"] = None
+            if h["symbol"] != SYMBOL:
+                try:
+                    h["prev"] = self.quotes.symbol_quote(h["symbol"]).get("prev_close")
+                    h["chg"] = h["price"] / h["prev"] - 1 if h["prev"] and h["price"] else None
+                except Exception:  # noqa: BLE001
+                    pass
         nxt = marketcal.next_pay_date(today - dt.timedelta(days=1))
         ex_div = None
         try:
@@ -270,9 +291,19 @@ class App:
                 "view": self.settings.get("chain_view") or "both", "error": c.get("error")}
 
     # ------------------------------------------------------------------ ticket
+    def _trade_symbol(self, o):
+        """Normalize the order's symbol in place. Returns an error text for something that can't be traded."""
+        s = watch.clean_symbol(o.get("symbol") or SYMBOL)
+        if not s:
+            return "That doesn't look like a ticker. Use letters, like SPY or BRK-B."
+        if watch.is_index(s):
+            return f"{s} is an index, which can be watched but not bought. Pick a stock or ETF."
+        o["symbol"] = s
+        return None
+
     def _quote_for(self, o, fresh):
         if o["action"] in ("buy_shares", "sell_shares"):
-            return self.quotes.share_quote(fresh=fresh)
+            return self.quotes.symbol_quote(o.get("symbol") or SYMBOL, fresh=fresh)
         if o.get("position_id") and o["action"] in ("buy_to_close", "sell_to_close"):
             p = self.led.position(int(o["position_id"]))
             o.update(type=p["type"], expiry=p["expiry"], strike=p["strike"])
@@ -326,17 +357,23 @@ class App:
         """Quote + rule check + effects + compare tables for the ticket side panel."""
         self.ind.warm()
         o = dict(order)
+        err = self._trade_symbol(o)
+        if err:
+            return {"error": err}
         try:
             q = self._quote_for(o, fresh)
         except Exception as e:  # noqa: BLE001
-            return {"error": f"Couldn't get a quote: {e}"}
+            return {"error": f"Couldn't get a quote for {o['symbol']}: {e}"}
         S = self.price()
         side = "sell" if o["action"] in ("sell_to_open", "sell_to_close", "sell_shares") else "buy"
         if q and o.get("price") in (None, ""):
             o["price"] = self.default_fill(q, side)
         chk = self.led.check(o, q, S)
         out = {"order": {**o, "price": o.get("price")}, "quote": q, "check": {k: chk[k] for k in ("ok", "msg", "warn")},
-               "effects": chk["effects"], "price": S, "market": self._market(), "default_fill": q and self.default_fill(q, side)}
+               "effects": chk["effects"], "price": S, "market": self._market(), "default_fill": q and self.default_fill(q, side),
+               "symbol": o["symbol"], "sym_price": q and q.get("last"), "sym_prev": q and q.get("prev_close"),
+               "held": self.led.shares(o["symbol"]) if self.led.run() else 0,
+               "free": self.led.free_shares(o["symbol"]) if self.led.run() else 0}
         if q and q.get("asof"):
             out["quote_txt"] = timeutil.fmt_ct(q["asof"], with_et=False)
             out["too_old"] = self.quotes.is_too_old(q["asof"])
@@ -426,6 +463,9 @@ class App:
     def api_review(self, order, shown=None):
         """Confirm step: re-quote, re-check, describe the trade. `shown` = the bid/ask the ticket displayed."""
         o = dict(order)
+        err = self._trade_symbol(o)
+        if err:
+            return {"error": err}
         try:
             q = self._quote_for(o, fresh=True)
         except Exception as e:  # noqa: BLE001
@@ -441,7 +481,7 @@ class App:
         msg = chk["msg"] if not too_old else "Quotes are more than 15 minutes old and couldn't be refreshed."
         no = chk["order"]
         if no["action"].endswith("shares"):
-            title = f"{'BUY' if no['action'] == 'buy_shares' else 'SELL'} {no['qty']} {SYMBOL} SHARES"
+            title = f"{'BUY' if no['action'] == 'buy_shares' else 'SELL'} {no['qty']} {no['symbol']} SHARES"
         else:
             words = {"sell_to_open": "SELL TO OPEN", "buy_to_open": "BUY TO OPEN", "buy_to_close": "BUY TO CLOSE",
                      "sell_to_close": "SELL TO CLOSE"}[no["action"]]
@@ -456,6 +496,9 @@ class App:
 
     def api_place(self, order):
         o = dict(order)
+        err = self._trade_symbol(o)
+        if err:
+            return {"error": err}
         try:
             q = self._quote_for(o, fresh=False)
             res = self.led.place(o, q, self.price())
@@ -473,7 +516,14 @@ class App:
                 extra = {"chances": ch} if ch else None
             except Exception:  # noqa: BLE001
                 log.exception("chances at open")
-        self._stamp_readings(res.get("event_id"), extra)
+        if o["symbol"] == SYMBOL:      # the saved readings are TQQQ's, so they aren't stamped on other symbols' trades
+            self._stamp_readings(res.get("event_id"), extra)
+        if o.get("action") == "buy_shares" and o["symbol"] != SYMBOL:
+            # a symbol you hold is a symbol you track
+            cur = watch.clean_list(self.settings.get("watchlist"))
+            if o["symbol"] not in cur and len(cur) < watch.MAX:
+                self.settings.update(watchlist=cur + [o["symbol"]])
+                self._wl = None
         return {"ok": True, **res}
 
     def _stamp_readings(self, event_id, extra=None):
@@ -522,19 +572,26 @@ class App:
         return {"ok": True}
 
     # ------------------------------------------------------------------ indicators
-    def api_indicators(self, range="5Y", refresh=False):
-        """Five years of everything; each chart group on the tab slices its own range."""
+    def api_indicators(self, range="5Y", refresh=False, symbol=None):
+        """Five years of everything; each chart group on the tab slices its own range. `symbol` (v1.18.0) is TQQQ or
+        a tracked symbol: price and stochastics are that symbol's; implied volatility and your trades are TQQQ-only."""
         months = 60
+        sym = watch.clean_symbol(symbol) or SYMBOL
+        if sym != SYMBOL and sym not in watch.clean_list(self.settings.get("watchlist")):
+            return {"error": f"{sym} isn't on your tracked list."}
         if refresh:
             self.ind.refresh(force=True)
         elif self.ind.stale():
             self.ind.wait_warm(20)
             if self.ind.stale():
                 self.ind.refresh()
-        v = self.ind.view(months)
+        src = "tqqq" if sym == SYMBOL else self.ind.refresh_symbol(sym, force=bool(refresh))
+        v = self.ind.view(months, src)
         v["range"] = "5Y"
-        v.update(self._vol_series(v["days"], v["close"]))
-        v["trades"] = self._trade_days(v["days"][0] if v["days"] else None)
+        v["symbol"] = sym
+        v["symbols"] = [SYMBOL] + watch.clean_list(self.settings.get("watchlist"))
+        v.update(self._vol_series(v["days"], v["close"], with_iv=sym == SYMBOL))
+        v["trades"] = self._trade_days(v["days"][0] if v["days"] else None) if sym == SYMBOL else {}
         for st in v["status"].values():
             if st["at"]:
                 st["at_txt"] = timeutil.fmt_ct(st["at"], with_date=True)
@@ -542,10 +599,10 @@ class App:
         return v
 
     # ------------------------------------------------------------------ volatility (v1.11.0)
-    def _vol_series(self, days, closes):
+    def _vol_series(self, days, closes, with_iv=True):
         """IV history (TQQQ 30-day ATM, saved daily since v1.9.0) and 30-day realized volatility, lined up with the
         Indicators days, plus today's IV with its rank and percentile over the past year of readings."""
-        hist = dict(ivhist.history(self.db))
+        hist = dict(ivhist.history(self.db)) if with_iv else {}   # saved IV is TQQQ's only
         iv = [hist.get(d) for d in days]
         hv = [None] * len(days)
         rets = [math.log(closes[i] / closes[i - 1]) if closes[i] and closes[i - 1] else None for i in range(1, len(closes))]
@@ -975,6 +1032,98 @@ class App:
         return {"qqq": row("QQQ"), "tqqq": row(SYMBOL), "heavy": [row(s) for s in self.EARNINGS], "soon": soon,
                 "earnings": self._earnings_impact(), "error": err,
                 "asof": c and timeutil.fmt_ct(timeutil.parse(c["asof"]), with_date=True), "market": self._market()}
+
+    # ------------------------------------------------------------------ tracked symbols (v1.14.0)
+    WATCH_TTL = 60
+
+    def _watch_snap(self, syms, refresh=False):
+        """{symbol: {price, prev_close}} for the tracked list, cached for a minute; failures keep the last good copy."""
+        c = getattr(self, "_wl", None)
+        if c and not refresh and c["syms"] == list(syms) and time.time() - c["t"] < self.WATCH_TTL:
+            return c["snap"], None
+        try:
+            snap = self.provider.market_snapshot(list(syms)) or {}
+        except Exception as e:  # noqa: BLE001
+            return (c or {}).get("snap") or {}, f"Couldn't get quotes: {e}"
+        snap = {**((c or {}).get("snap") or {}), **snap}
+        self._wl = {"t": time.time(), "syms": list(syms), "snap": snap, "asof": timeutil.iso()}
+        return snap, None
+
+    def api_watchlist(self, refresh=False):
+        """The tracked symbols with price and today's change. Indexes are tracked only; they can't be bought."""
+        syms = watch.clean_list(self.settings.get("watchlist"))
+        snap, err = self._watch_snap(syms, refresh)
+        rows = []
+        for s in syms:
+            q = snap.get(s)
+            row = {"symbol": s, "name": watch.NAMES.get(s, ""), "index": watch.is_index(s)}
+            if q and q.get("price"):
+                row.update(price=q["price"], prev=q.get("prev_close"),
+                           chg=q["price"] / q["prev_close"] - 1 if q.get("prev_close") else None)
+            else:
+                row["missing"] = True
+            rows.append(row)
+        c = getattr(self, "_wl", None)
+        return {"rows": rows, "error": err, "max": watch.MAX,
+                "asof": c and timeutil.fmt_ct(timeutil.parse(c["asof"]), with_date=True)}
+
+    CHART_TTL = 15 * 60
+
+    def api_watch_charts(self, refresh=False):
+        """A year of daily closes for each tracked symbol, for the watchlist's small charts. Symbols are fetched side by
+        side and cached for 15 minutes; one that fails is left out (and retried next time), not an error for the rest."""
+        from concurrent.futures import ThreadPoolExecutor
+        syms = watch.clean_list(self.settings.get("watchlist"))
+        cache = self.__dict__.setdefault("_wc", {})
+        today = timeutil.today_ct()
+        start = today - dt.timedelta(days=370)
+        todo = [s for s in syms if refresh or s not in cache or time.time() - cache[s][0] > self.CHART_TTL]
+
+        def get(s):
+            try:
+                cl = self.provider.daily_closes(start, today, symbol=s)
+                return s, sorted(cl.items()) if cl else None
+            except Exception as e:  # noqa: BLE001
+                log.warning("watch chart %s: %s", s, e)
+                return s, None
+        if todo:
+            with ThreadPoolExecutor(max_workers=6) as ex:
+                for s, rows in ex.map(get, todo):
+                    if rows:
+                        cache[s] = (time.time(), rows)
+        return {"series": {s: [[d, c] for d, c in cache[s][1]] for s in syms if s in cache},
+                "missing": [s for s in syms if s not in cache]}
+
+    def api_watch_add(self, symbol=""):
+        """Add a symbol after Yahoo returns a price for it, so a typo can't sit in the list."""
+        s = watch.clean_symbol(symbol)
+        if not s:
+            return {"error": "That doesn't look like a ticker. Use letters, like QQQ, BRK-B, or ^VIX for an index."}
+        cur = watch.clean_list(self.settings.get("watchlist"))
+        if s in cur:
+            return {"error": f"{s} is already on the list."}
+        if s == SYMBOL:
+            return {"error": f"{SYMBOL} is already tracked everywhere in Ghost Trader."}
+        if len(cur) >= watch.MAX:
+            return {"error": f"The list holds up to {watch.MAX} symbols. Remove one first."}
+        try:
+            got = self.provider.market_snapshot([s]) or {}
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"Couldn't check {s} with Yahoo: {e}"}
+        if not (got.get(s) or {}).get("price"):
+            return {"error": f"Yahoo has no quote for {s}. Check the spelling (indexes start with ^)."}
+        self.settings.update(watchlist=cur + [s])
+        self._wl = None
+        return {"ok": True, "symbol": s}
+
+    def api_watch_remove(self, symbol=""):
+        s = watch.clean_symbol(symbol)
+        cur = watch.clean_list(self.settings.get("watchlist"))
+        if s not in cur:
+            return {"error": "That symbol isn't on the list."}
+        self.settings.update(watchlist=[x for x in cur if x != s])
+        self._wl = None
+        return {"ok": True}
 
     # ------------------------------------------------------------------ calendar notes (v1.12.0)
     NOTE_REMIND = {"none": "no reminder", "morning": "reminder that morning (7:45 AM CT)",
@@ -1522,6 +1671,10 @@ class App:
                 self.quotes.chain(exp, fresh=True)
             except Exception as e:  # noqa: BLE001
                 errs.append(f"{exp}: {e}")
+        try:
+            self._watch_snap(watch.clean_list(self.settings.get("watchlist")), refresh=True)
+        except Exception:  # noqa: BLE001
+            log.exception("watchlist refresh")
         self.data_asof = timeutil.now()
         self.ind.warm()
         threading.Thread(target=ivhist.record_safe, args=(self,), daemon=True).start()

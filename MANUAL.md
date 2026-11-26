@@ -294,6 +294,8 @@ The fund rebalances once a day, but the market can move a lot between one close 
 
 Ghost Trader's **Indicators** tab shows three common ways traders read the market: the stochastic oscillator on TQQQ, the VIX, and CNN's Fear & Greed index, plus TQQQ's own implied volatility. This part explains what each one measures. None of them predicts prices. They describe where things stand right now compared with the recent past.
 
+**Other symbols (v1.18.0).** A *Symbol* row at the top of the tab switches it to any symbol on your tracked list: the price, the stochastics and the realized volatility are then that symbol's, and the VIX and Fear & Greed stay the same. Implied volatility (the IV tile and the implied line) and your trades are TQQQ-only, so they're hidden for other symbols. The readings saved with each trade you place are always TQQQ's, whichever symbol you're looking at. Opening a trade from History or a position takes you back to TQQQ.
+
 ### The stochastic oscillator
 
 The stochastic oscillator asks one question: **where did the latest close land within the recent high-to-low range?** It's a number from 0 to 100:
@@ -386,7 +388,7 @@ It is:
 
 - **Paper money only.** Nothing is ever sent to a broker.
 - **Real quotes, delayed.** Option chains and the TQQQ price come from Yahoo Finance and are about 15 minutes behind during market hours.
-- **TQQQ only.**
+- **Options are TQQQ only; shares can be any stock or ETF (v1.19.0).**
 - **Strict.** Every trade is checked against the rules before you can confirm it, and there's no undo.
 
 It is not a perfect simulator. Things it doesn't model:
@@ -445,9 +447,16 @@ Open options aren't counted at their current buy-back price. Premium goes into A
 The main screen. From top to bottom:
 
 - **Alerts** (see below).
-- **Cards:** account value and return, Available, Collateral, Shares, premium collected this run, and interest earned (with the next pay date).
+- **Cards:** account value and return, Available, Collateral, Shares (with **Buy** and **Sell** buttons that open a share ticket; Sell is greyed out when you hold no shares or all of them are covering calls), premium collected this run, and interest earned (with the next pay date).
 - **Open options:** each position with contracts, the price you sold at, the current mark, collateral or shares covering, distance from the strike (and whether it's ITM or OTM), days to expiration (DTE), and P&L. Double-click a contract to open it in the Chain with its details panel. **Close** opens a buy-to-close ticket.
-- **Shares:** your lots, average cost, value and P&L, how many shares are covering calls and how many are free. **Buy shares…** opens a share ticket.
+- **Shares:** a row for each symbol you hold (v1.19.0): lots, average cost, price and today's change, value and P&L, and how many shares are covering calls and how many are free. **Buy** and **Sell** on a row open a share ticket for that symbol; **Buy shares…** opens one you can point at any symbol.
+
+**Buying and selling shares of any symbol (v1.19.0).** The share ticket has a *Symbol* row. To buy, type any stock or ETF (like SPY, or BRK-B) and press *Use*, or tap one you already track. Ghost Trader asks Yahoo for a quote first, and a ticker Yahoo doesn't know is refused. Indexes (starting with ^) can be watched but not bought. When you buy a symbol for the first time it joins your tracked list. To sell, pick among the symbols you hold. The same rules apply as for TQQQ shares: the fill must be within the bid and ask, you need the cash, and you can't sell more than you hold. Shares covering a call can't be sold. Things to know:
+
+- **Account value** counts every symbol you hold at its latest price (cached about a minute), so it moves with all of them. Missed days are estimated using each symbol's daily closes.
+- **Dividends** on any symbol you hold are credited at startup, like TQQQ's (once per symbol and ex-date). A **split** asks what to do, per symbol, the same way TQQQ's does, and only changes that symbol's lots.
+- **Options stay TQQQ only for now.** Covered calls need 100 shares of the same symbol, and an option order for another symbol is refused. Selling shares you hold of another symbol doesn't touch any TQQQ call.
+- The indicator readings saved with a trade are TQQQ's, so they aren't saved on trades in other symbols.
 - **Wheel cycles (v1.13.0):** every trip around the wheel that's still going (see *Wheel cycles* below), with a quick summary: open cycles, success rate, profit on finished cycles and full wheels, plus a link to the finished ones on Performance.
 - **Where TQQQ could go:** TQQQ's last few months, then a shaded cone from today out to your latest expiration. The inner band (the brighter one in dark mode, the deeper one in light mode) is where TQQQ would end up about 68% of the time if it moves as its implied volatility says; the outer band, inner included, about 95%. Each open option is drawn as its strike, from today to its expiration (puts in amber, calls in green). Hover the past for a close. Hover the future and a box says what the cone means for that date: in the inner band, "about 68% chance TQQQ closes between $a and $b at the close on Fri, Dec 4"; in the outer band, the 95% range (and the 14% on that side); outside the cone, the chance it closes beyond the edge; on one of your strike lines, the chance TQQQ closes below a put's strike (or above a call's) on that date. The date snaps to the nearest weekday. The cone uses TQQQ's 30-day at-the-money IV (saved daily since v1.9.0). It says how far TQQQ might move, not which way.
 - A link to the **calendar**, which moved to the Market tab in v1.12.0.
@@ -483,6 +492,7 @@ What's driving TQQQ, in one place:
 
 - **QQQ and TQQQ today**, with what 3× QQQ's move would be (TQQQ aims for 3× QQQ's daily move, and usually lands close).
 - **Coming up:** the next seven days' Fed, CPI and jobs releases and heavyweight earnings.
+- **Your watchlist (v1.18.0):** a card for each symbol you track (Settings → Tracked symbols): price, today's change and a small chart. The *1M / 3M / 6M / 1Y* buttons set the chart's range and the change shown under it (green if the symbol is up over that range, red if down). Click a card to open that symbol on Indicators. Index levels (starting with ^) show without a $.
 - **Nasdaq heavyweights today:** NVIDIA, Apple, Microsoft, Amazon, Alphabet, Meta, Broadcom and Tesla as a heat map, each box sized by its market value and colored by today's change (green up, red down, stronger color for a bigger move). Hover a box for its price, change, size and next earnings date.
 - **Earnings and TQQQ:** the companies in order of their next report, soonest first. When a company hasn't announced its next date yet (usual for a few weeks after it reports), the table shows an estimate, one quarter after its last report, marked "~" and "(est.)", and sorts by that. For each: its next report date and TQQQ's move around its last eight reports, each measured from the close before the report date to the close the trading day after, so it catches reports before the open and after the close. The typical move is the average size of those moves, up or down, alongside the worst and best. TQQQ moves for other reasons on those days too, so read it as a rough guide.
 - **Refresh** gets new quotes (they're also refreshed every few minutes while you're on the tab).
@@ -666,6 +676,7 @@ A cycle's **profit** is the premium from the put and its calls (net of anything 
 - **Trading:** the rules, the fill defaults, and the switch for buying options to open.
 - **Data & interest:** the Alpha Vantage key, rate source, manual rate, haircut, **auto-refresh**, and expiration-day alerts.
 - **Notifications:** the end-of-day summary switch and your indicator alerts (see [Notifications](#notifications)).
+- **Tracked symbols:** the list Ghost Trader follows besides TQQQ. It starts with QQQ, SPY, SQQQ and the S&P 500, Nasdaq-100 and VIX index levels. Each row shows the price and today's change. Type a ticker (like IWM, or ^RUT for an index) and press *Add*; Ghost Trader checks that Yahoo has a quote for it first, so a typo can't join the list. The × removes one. Indexes (starting with ^) are for watching only and can't be bought. The list refreshes with the other quotes while the market is open. Up to 40 symbols. For now this is only the list and its prices; charts and share trading for these symbols come in later versions.
 
 **Auto-refresh** re-fetches TQQQ and the quotes for your open positions every 5, 10 or 15 minutes while the market is open (10 by default), so P&L, alerts and the header stay current without clicking Refresh. It pauses the screen update while a ticket or dialog is open. Quotes are still Yahoo's, about 15 minutes behind.
 - **Runs & app:** the current run, past runs, closing a run, the data folder, the last backup, and the version.
