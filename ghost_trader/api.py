@@ -290,6 +290,68 @@ class App:
                 "asof": timeutil.fmt_ct(c["asof"]), "market": self._market(), "held": held,
                 "view": self.settings.get("chain_view") or "both", "error": c.get("error")}
 
+    # ------------------------------------------------------------------ command palette (v1.22.0)
+    def api_expirations(self):
+        """Upcoming expirations for the command palette's contract search. Read-only."""
+        try:
+            exps = [e for e in self.quotes.expirations() if e >= timeutil.today_ct().isoformat()][:16]
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"No expiration list: {e}", "items": []}
+        today = timeutil.today_ct()
+        return {"items": [{"exp": e, "label": timeutil.fmt_exp(e), "dte": (dt.date.fromisoformat(e) - today).days,
+                           "words": dt.date.fromisoformat(e).strftime("%b %B %-d %A").lower()} for e in exps]}
+
+    # ------------------------------------------------------------------ chain heat map (v1.21.0)
+    MAP_EXPIRIES = 8
+    MAP_BAND = 0.15
+
+    def api_chain_map(self):
+        """The strike x expiration map under the Chain: for the next few expirations and the strikes within about 15%
+        of TQQQ, each short put's and call's annualized return, chance of expiring worthless, IV and volume. Read-only."""
+        if not self.led.run():
+            return {"error": "Start a run first."}
+        S = self.price()
+        if not S:
+            return {"error": "No TQQQ price yet."}
+        today = timeutil.today_ct()
+        rate = self.rates.for_day(today) or 0.0
+        try:
+            exps = [e for e in self.quotes.expirations() if e >= today.isoformat()][:self.MAP_EXPIRIES]
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"No expiration list: {e}"}
+        held = {}
+        for p in self.led.positions():
+            held[(p["expiry"], p["type"], p["strike"])] = p["id"]
+        lo, hi = S * (1 - self.MAP_BAND), S * (1 + self.MAP_BAND)
+        cols, cells, strikes, stale, asof = [], {"put": {}, "call": {}}, set(), False, None
+        for e in exps:
+            try:
+                c = self.quotes.chain(e)
+            except Exception as ex:  # noqa: BLE001
+                log.warning("chain map %s: %s", e, ex)
+                continue
+            stale = stale or bool(c.get("stale"))
+            asof = min(asof, c["asof"]) if asof else c["asof"]
+            dte = (dt.date.fromisoformat(e) - today).days
+            cols.append({"expiry": e, "label": timeutil.fmt_exp(e), "short": dt.date.fromisoformat(e).strftime("%b %-d"), "dte": dte})
+            for x in c["rows"]:
+                k, typ = x["strike"], x["type"]
+                if not (lo <= k <= hi) or (x.get("bid") or 0) <= 0:
+                    continue
+                q = {"bid": x["bid"], "ask": x["ask"], "mid": x.get("mid") or round((x["bid"] + x["ask"]) / 2, 2)}
+                px = self.default_fill(q, "sell")
+                base = k * 100 if typ == "put" else S * 100
+                intr = (k * 100 * rate / 100 * max(dte, 0) / 365) if typ == "put" else 0
+                ret = (px * 100 + intr) / base if base else 0
+                ch = self._chances(typ, S, k, px, dte, x.get("iv"), rate)
+                cells[typ].setdefault(e, {})[f"{k:g}"] = {
+                    "bid": x["bid"], "ask": x["ask"], "mid": px, "iv": x.get("iv"), "vol": x.get("volume"),
+                    "ann": ret * 365 / max(dte, 1), "ret": ret, "worthless": ch and ch["worthless"],
+                    "held": held.get((e, typ, k))}
+                strikes.add(k)
+        return {"price": S, "cols": cols, "strikes": sorted(strikes), "cells": cells,
+                "asof": asof and timeutil.fmt_ct(asof), "stale": stale or not self._market()["open"]}
+
     # ------------------------------------------------------------------ ticket
     def _trade_symbol(self, o):
         """Normalize the order's symbol in place. Returns an error text for something that can't be traded."""
@@ -1506,6 +1568,70 @@ class App:
         horizon = max([p["dte"] for p in pos] + [30 if id is None else 1])
         return {"today": today.isoformat(), "price": S, "closes": closes, "iv": iv, "iv_src": src,
                 "rate": (self.rates.for_day(today) or 0) / 100, "horizon": horizon, "positions": pos}
+
+    # ------------------------------------------------------------------ roll map (v1.20.0)
+    ROLL_EXPIRIES = 3
+
+    def api_roll_map(self, id):
+        """Rolling a short option = buy it back, then sell a later one. This only maps the options: step 1 (buy to
+        close the one you hold) and, for each candidate, step 2 (sell to open the new one), with the net credit or
+        debit and the new option's chances. Nothing is placed; each step opens its own ticket in the app."""
+        p = self.led.position(int(id)) if self.led.run() else None
+        if not p or p["status"] != "open" or p["side"] != "short":
+            return {"error": "Roll maps are for open short options."}
+        S = self.price()
+        today = timeutil.today_ct()
+        rate = self.rates.for_day(today) or 0.0
+        try:
+            q0 = self.quotes.quote(p["expiry"], p["type"], p["strike"], fresh=False)
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"Couldn't get a quote for {p['label']}: {e}"}
+        if not q0 or not q0.get("ask"):
+            return {"error": f"No ask to buy {p['label']} back at right now."}
+        close_px = self.default_fill(q0, "buy")
+        qty, typ, k0 = p["open_qty"], p["type"], p["strike"]
+        try:
+            exps = [e for e in self.quotes.expirations() if e > p["expiry"]][:self.ROLL_EXPIRIES]
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"No expiration list: {e}"}
+        safer = -1 if typ == "put" else 1           # puts roll down, calls roll up: further from the money
+        rolls, asof, stale = [], None, bool(q0.get("stale"))
+        for e in exps:
+            try:
+                c = self.quotes.chain(e)
+            except Exception as ex:  # noqa: BLE001
+                log.warning("roll map %s: %s", e, ex)
+                continue
+            asof = min(asof, c["asof"]) if asof else c["asof"]
+            stale = stale or bool(c.get("stale"))
+            rows = {x["strike"]: x for x in c["rows"] if x["type"] == typ and (x.get("bid") or 0) > 0}
+            picks, seen = [], set()
+            want = [(0.0, "same strike")] + [(f, f"about {f * 100:.0f}% further from the money") for f in (0.02, 0.05)]
+            for frac, why in want:
+                tgt = k0 * (1 + safer * frac)
+                ok = sorted((k for k in rows if (k - k0) * safer >= 0), key=lambda k: abs(k - tgt))
+                if ok and ok[0] not in seen:
+                    seen.add(ok[0])
+                    picks.append((ok[0], why))
+            for k, why in picks:
+                x = rows[k]
+                q = {"bid": x["bid"], "ask": x["ask"], "mid": x.get("mid") or round((x["bid"] + x["ask"]) / 2, 2)}
+                px = self.default_fill(q, "sell")
+                dte = (dt.date.fromisoformat(e) - today).days
+                net_ps = round(px - close_px, 2)
+                move = "Roll out" + ("" if k == k0 else (" and down" if typ == "put" else " and up") + f" ${abs(k - k0):g}")
+                rolls.append({"expiry": e, "exp_label": timeutil.fmt_exp(e), "strike": k, "dte": dte, "added": (dt.date.fromisoformat(e) - dt.date.fromisoformat(p["expiry"])).days,
+                              "move": move, "bid": x["bid"], "ask": x["ask"], "price": px, "net_ps": net_ps,
+                              "net_c": cents(net_ps * 100 * qty), "credit": net_ps >= 0,
+                              "collateral_c": cents(k * 100 * qty) if typ == "put" else None,
+                              "chances": self._chances(typ, S, k, px, dte, x.get("iv"), rate), "iv": x.get("iv"),
+                              "label": f"{timeutil.fmt_exp(e)} {strike_txt(k)} {typ.title()}"})
+        return {"position": {"id": p["id"], "label": p["label"], "type": typ, "strike": k0, "expiry": p["expiry"], "qty": qty,
+                             "dte": (dt.date.fromisoformat(p["expiry"]) - today).days, "collateral_c": p["collateral_c"],
+                             "open_price": p["open_price"]},
+                "S": S, "close_px": close_px, "close_c": cents(close_px * 100 * qty), "rolls": rolls,
+                "asof": asof and timeutil.fmt_ct(asof), "stale": stale or not self._market()["open"],
+                "chances_now": self._chances(typ, S, k0, close_px, (dt.date.fromisoformat(p["expiry"]) - today).days, q0.get("iv"), rate)}
 
     # ------------------------------------------------------------------ backup & restore (v1.9.0)
     BACKUP_LABELS = {"startup": "at startup", "pre-update": "before an update", "manual": "by you",

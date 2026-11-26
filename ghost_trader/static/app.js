@@ -144,6 +144,7 @@ document.addEventListener("click", e => {
 });
 document.addEventListener("keydown", e => {
   if (!st) return;
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") { e.preventDefault(); if (!$("#splash").innerHTML) openPalette(); return; }
   if (e.target.matches("input,select,textarea")) { if (e.key === "Escape") e.target.blur(); else return; }
   if ($("#splash").innerHTML) return;
   if (e.key === "Escape" && $("#ctxmenu")) { closeCtx(); return; }
@@ -151,6 +152,70 @@ document.addEventListener("keydown", e => {
   if (/^[1-8]$/.test(e.key) && !$("#overlay").innerHTML && st.run) { ui.tab = TABS[+e.key - 1]; resetMarks(); closeDrawer(); render(); }
   if (e.key === "Enter" && $("#confirmBtn") && !$("#confirmBtn").disabled) $("#confirmBtn").click();
 });
+
+/* ---------- COMMAND PALETTE (v1.22.0) ---------- */
+const PAL_SETTINGS = [
+  ["Alpha Vantage API key", "api key rate token", "Data & interest"], ["Interest rate source and haircut", "rate t-bill manual haircut interest", "Data & interest"],
+  ["Auto-refresh quotes", "auto refresh quotes minutes", "Data & interest"], ["Expiration-day alerts", "expiration alert nudge reminder", "Data & interest"],
+  ["End-of-day summary", "eod summary notification", "Notifications"], ["Indicator alerts", "alerts vix stochastic fear greed", "Notifications"],
+  ["Allow buying options to open", "long options buy to open", "Trading"], ["Fill price default and limits", "fill price bid ask mid", "Trading"],
+  ["Sizing warning", "sizing warning collateral percent", "Trading"], ["Fees", "fees commissions", "Trading"],
+  ["Theme (dark, light, system)", "theme dark light appearance", "Appearance"], ["Times and fonts", "time zone font appearance", "Appearance"],
+  ["Back up now / restore", "backup restore export ledger", "Runs & app"], ["Past runs", "past runs close run csv", "Runs & app"],
+  ["Data folder", "folder path data", "Runs & app"], ["Tags", "tags rename", "Runs & app"], ["Version and updates", "version update", "Runs & app"]];
+const PAL_ACTIONS = [
+  ["Refresh quotes", "refresh quotes update prices", () => { toast(`<span class=spin>${I("spin")}</span> Refreshing…`, 2000); api("refresh_open").then(async () => { await refreshState(); render(); toast(`${I("check")} Refreshed`, 1500); }); }],
+  ["Buy shares…", "buy shares ticket", () => openShares("buy_shares")],
+  ["Back up now", "backup save ledger", () => api("backup_now").then(r => toast(r.error ? esc(r.error) : `${I("check")} Backed up`, 2500))],
+  ["Add a calendar note for today", "calendar note event reminder add", () => { ui.tab = "Market"; render().then(() => noteEditor({day: new Date().toLocaleDateString("en-CA", {timeZone: "America/Chicago"}), kind: "note", remind: "none"})); }]];
+async function openPalette() {
+  if (!st || !st.run || $("#overlay").innerHTML) return;
+  $("#overlay").innerHTML = `<div class=scrim style="align-items:flex-start;padding-top:12vh"><div class=modal style="width:560px;padding:0;overflow:hidden">
+    <input id=palIn placeholder="Jump to a tab, position, contract (try: 55 put dec), setting or manual section…" style="width:100%;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:14px 16px;font-size:15px;background:transparent" autocomplete=off>
+    <div id=palList style="max-height:56vh;overflow:auto"></div>
+    <div class=meta style="padding:6px 14px;border-top:1px solid var(--line)"><span class=kbd>↑</span> <span class=kbd>↓</span> move · <span class=kbd>Enter</span> go · <span class=kbd>Esc</span> close</div></div></div>`;
+  const inp = $("#palIn"); inp.focus();
+  if (!ui.palExp) api("expirations").then(r => { ui.palExp = r.items || []; if ($("#palIn")) paint(); });
+  if (!ui.palToc) api("manual").then(r => { ui.palToc = r.toc || []; if ($("#palIn")) paint(); });
+  let sel = 0, items = [];
+  const close = () => closeOverlay();
+  const run = it => { close(); if (it) it.run(); };
+  function build(q) {
+    const toks = q.toLowerCase().split(/\s+/).filter(Boolean), out = [];
+    const ok = hay => toks.every(t => hay.includes(t));
+    const add = (group, title, sub, hay, run, boost = 0) => { if (!toks.length || ok(hay.toLowerCase())) out.push({group, title, sub, run, score: boost + (toks.length && hay.toLowerCase().startsWith(toks[0]) ? 0 : 1)}); };
+    TABS.forEach((t, i) => add("Go to", t, `tab ${i + 1}`, t, () => { ui.tab = t; resetMarks(); closeDrawer(); render(); }, -1));
+    (st.positions || []).forEach(p => add("Your positions", p.label, `${p.kind} · ${plural(p.open_qty, "contract")}`, `${p.label} ${p.kind} position`, () => openPosPanel(p.id)));
+    const n = toks.find(t => /^\d+(\.\d+)?$/.test(t)), kind = toks.some(t => /^(p|put|puts)$/.test(t)) ? "put" : toks.some(t => /^(c|call|calls)$/.test(t)) ? "call" : null;
+    if (n) { const words = toks.filter(t => t !== n && !/^(p|c|put|puts|call|calls)$/.test(t));
+      (ui.palExp || []).filter(x => words.every(w => x.words.includes(w) || (w.length > 2 && x.label.toLowerCase().includes(w)))).slice(0, 6).forEach(x =>
+        (kind ? [kind] : ["put", "call"]).forEach(t => out.push({group: "Sell a contract", title: `${x.label} $${+n} ${t === "put" ? "Put" : "Call"}`, sub: `${x.dte} days · opens a sell ticket`, score: 0,
+          run: async () => { ui.tab = "Chain"; ui.chainExp = x.exp; ui.flashStrike = +n; await render(); openTicket({expiry: x.exp, strike: +n, type: t, action: "sell_to_open"}); }}))); }
+    else if (toks.length) (ui.palExp || []).filter(x => toks.every(w => x.words.includes(w))).slice(0, 4).forEach(x =>
+      out.push({group: "Chain", title: `Chain: ${x.label}`, sub: `${x.dte} days`, score: 0, run: () => { ui.tab = "Chain"; ui.chainExp = x.exp; ui.flashStrike = null; closeDrawer(); render(); }}));
+    PAL_SETTINGS.forEach(([t, kw, card]) => add("Settings", t, card, `${t} ${kw} ${card} settings`, () => { ui.tab = "Settings"; closeDrawer(); render().then(() => { const h = [...document.querySelectorAll("#main h2")].find(x => x.textContent.trim() === card); if (h) h.scrollIntoView({block: "start", behavior: "smooth"}); }); }));
+    PAL_ACTIONS.forEach(([t, kw, fn]) => add("Actions", t, "", `${t} ${kw}`, fn));
+    (ui.palToc || []).filter(x => x.level >= 2).forEach(x => add("Manual", x.text, "", x.text + " manual help", () => go("help:" + x.id)));
+    const order = ["Go to", "Sell a contract", "Chain", "Your positions", "Actions", "Settings", "Manual"];
+    out.sort((a, b) => a.score - b.score || order.indexOf(a.group) - order.indexOf(b.group));
+    return (toks.length ? out : out.filter(x => ["Go to", "Your positions", "Actions"].includes(x.group))).slice(0, 12);
+  }
+  function paint() {
+    items = build(inp.value); sel = Math.min(sel, Math.max(items.length - 1, 0));
+    let last = "";
+    $("#palList").innerHTML = items.map((it, i) => { const h = it.group !== last ? `<div class=meta style="padding:8px 16px 2px;letter-spacing:.04em;text-transform:uppercase;font-size:10px">${esc(it.group)}</div>` : ""; last = it.group;
+      return `${h}<div class="palrow ${i === sel ? "on" : ""}" data-i="${i}"><span>${esc(it.title)}</span><span class=meta>${esc(it.sub || "")}</span></div>`; }).join("") || `<div class=meta style="padding:14px 16px">Nothing matches. Try a tab name, a strike and put or call (55 put dec), or a setting.</div>`;
+    $$(".palrow").forEach(r => { r.onmousemove = () => { if (sel !== +r.dataset.i) { sel = +r.dataset.i; $$(".palrow").forEach(x => x.classList.toggle("on", x === r)); } }; r.onclick = () => run(items[+r.dataset.i]); });
+    const on = $(".palrow.on"); if (on) on.scrollIntoView({block: "nearest"});
+  }
+  inp.oninput = () => { sel = 0; paint(); };
+  inp.onkeydown = e => {
+    if (e.key === "ArrowDown") { e.preventDefault(); sel = Math.min(sel + 1, items.length - 1); paint(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); sel = Math.max(sel - 1, 0); paint(); }
+    else if (e.key === "Enter") { e.preventDefault(); run(items[sel]); }
+  };
+  paint();
+}
 
 /* ---------- render ---------- */
 async function refreshState() { const s = await api("state"); if (!s.error) st = s; return st; }
@@ -438,7 +503,9 @@ async function renderChain() {
     <button class="btn small" style="margin-left:auto" id=chainRef title="Fetch this chain again">${I("refresh")} Refresh</button></div>
     ${c.error ? `<div class="alert w"><span class=ic>${I("warn")}</span><span>Couldn't refresh this chain (${esc(c.error)}); showing the last good quotes.</span></div>` : ""}
     <div class=bar><span class=big>TQQQ ${f2(Sx)}</span>${chg == null ? "" : `<span class="${chg >= 0 ? "up" : "down"}">${chg >= 0 ? "+" : "−"}${Math.abs(chg).toFixed(2)} (${chg >= 0 ? "+" : "−"}${Math.abs(chg / c.prev_close * 100).toFixed(2)}%)</span>`}<span class=meta>· <span class=itmkey></span> in the money · <span class=warn>●</span> = you hold this strike · click any price to open a ticket</span></div>
-    <div class=chainbox id=chainbox><table class=both><thead>${head}</thead><tbody>${rows.join("") || `<tr><td colspan=11 class=empty>No strikes with a bid for this expiration.</td></tr>`}</tbody></table></div>`;
+    <div class=chainbox id=chainbox><table class=both><thead>${head}</thead><tbody>${rows.join("") || `<tr><td colspan=11 class=empty>No strikes with a bid for this expiration.</td></tr>`}</tbody></table></div>
+    <h2 style="margin-top:18px">Strike × expiration map</h2><div id=chainMap class=card style="padding:12px 14px"><span class=meta><span class=spin>${I("spin")}</span> Getting the next few expirations…</span></div>`;
+  loadChainMap();
   $("#expSel").onchange = ev => { ui.chainExp = ev.target.value; ui.flashStrike = null; render(); };
   $$("[data-view]").forEach(b => b.onclick = () => { ui.chainView = b.dataset.view; render(); });
   $("#chainRef").onclick = async () => { await api("refresh_quote", {expiry: e, type: "put", strike: atm}); render(); };
@@ -446,12 +513,49 @@ async function renderChain() {
   setTimeout(() => { const t = document.getElementById("k" + (ui.flashStrike || atm)), box = $("#chainbox"); if (!box) return; if (t) box.scrollTop = t.offsetTop - box.clientHeight / 2; const hr = box.querySelectorAll("thead tr"); if (hr.length > 1) hr[1].querySelectorAll("th").forEach(th => th.style.top = hr[0].offsetHeight + "px"); }, 0);
 }
 
+/* ---------- CHAIN HEAT MAP (v1.21.0) ---------- */
+const MAP_METRICS = {
+  ann: {name: "Annualized return", tip: "Premium (plus interest on a put's collateral) as a share of the collateral, if repeated back-to-back for a year. A yardstick, not a forecast.", get: x => x.ann, fmt: v => Math.round(v * 100) + "%"},
+  worthless: {name: "Chance worthless", tip: "Estimated chance the option you sell expires worthless, from its implied volatility. Not a prediction.", get: x => x.worthless, fmt: v => Math.round(v * 100) + "%"},
+  iv: {name: "IV", tip: "Implied volatility of that contract.", get: x => x.iv, fmt: v => Math.round(v * 100) + "%"},
+  vol: {name: "Volume", tip: "Contracts traded today.", get: x => x.vol, fmt: v => v >= 10000 ? (v / 1000).toFixed(0) + "k" : v >= 1000 ? (v / 1000).toFixed(1) + "k" : String(v)},
+};
+async function loadChainMap() {
+  const d = await api("chain_map"); ui.cmap = d; drawChainMap();
+}
+function drawChainMap() {
+  const el = $("#chainMap"), d = ui.cmap; if (!el || !d) return;
+  if (d.error || !d.cols.length) { el.innerHTML = `<span class=meta>${esc(d.error || "No expirations with quotes right now.")}</span>`; return; }
+  const type = ui.cmapType || "put", mk = ui.cmapMetric || "ann", M = MAP_METRICS[mk], cs = d.cells[type];
+  const vals = [].concat(...d.cols.map(c => Object.values(cs[c.expiry] || {}).map(M.get))).filter(v => v != null && isFinite(v));
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  const ks = d.strikes.filter(k => d.cols.some(c => (cs[c.expiry] || {})[k]));
+  const itm = k => type === "put" ? k > d.price : k < d.price;
+  const cut = ks.findIndex(k => k > d.price);
+  const head = `<tr><th class=l>Strike</th>${d.cols.map(c => `<th data-tip="${esc(c.label)} · ${plural(c.dte, "day")}">${esc(c.short)}<div class=meta style="font-weight:400">${c.dte}d</div></th>`).join("")}</tr>`;
+  const line = `<tr><td colspan=${d.cols.length + 1} style="padding:0;height:18px;text-align:center;background:linear-gradient(var(--accent),var(--accent)) center/100% 2px no-repeat"><span style="background:var(--accent);color:var(--plabel);border-radius:9px;padding:1px 8px;font-size:11px;font-weight:600">TQQQ ${f2(d.price)}</span></td></tr>`;
+  const body = ks.map(k => `<tr><td class=l><b>${k}</b>${itm(k) ? ` <span class=meta data-tip="In the money: assigned if it stays there at expiration">ITM</span>` : ""}</td>${d.cols.map(c => {
+    const x = (cs[c.expiry] || {})[k]; if (!x) return `<td class="meta hm0">·</td>`;
+    const v = M.get(x), t = v == null ? 0 : (v - lo) / span;
+    const tip = `${c.label} ${kTxt(k)} ${type === "put" ? "Put" : "Call"}: bid ${f2(x.bid)} · ask ${f2(x.ask)} · sell at ${f2(x.mid)}\n${x.ann != null ? "Annualized return " + Math.round(x.ann * 100) + "%" : ""}${x.worthless != null ? " · chance worthless " + Math.round(x.worthless * 100) + "%" : ""}${x.iv ? " · IV " + Math.round(x.iv * 100) + "%" : ""}${x.vol != null ? " · volume " + x.vol : ""}\nClick: open a sell ticket`;
+    return `<td class="hm ${itm(k) ? "itm" : ""}" style="background:color-mix(in srgb,var(--accent) ${v == null ? 0 : Math.round(8 + t * 62)}%,transparent)" data-e="${c.expiry}" data-k="${k}" data-tip="${esc(tip)}">${v == null ? "—" : M.fmt(v)}${x.held ? `<span class=held>●</span>` : ""}</td>`; }).join("")}</tr>`);
+  if (cut >= 0) body.splice(cut, 0, line); else body.push(line);
+  el.innerHTML = `<div class=bar style="margin:0 0 8px"><span class=seg>${["put", "call"].map(t => `<button class="btn small ${type === t ? "on" : ""}" data-cmt="${t}">Sell ${t}s</button>`).join("")}</span>
+    <span class=seg>${Object.entries(MAP_METRICS).map(([k, m]) => `<button class="btn small ${mk === k ? "on" : ""}" data-cmm="${k}" data-tip="${esc(m.tip)}">${m.name}</button>`).join("")}</span>
+    <span class=meta style="margin-left:auto">${d.asof ? "quotes " + esc(d.asof) + (d.stale ? " (stale)" : "") : ""}</span></div>
+    <div style="overflow:auto"><table class="mini hmap"><thead>${head}</thead><tbody>${body.join("")}</tbody></table></div>
+    <div class=meta style="margin-top:6px">The next ${d.cols.length} expirations, strikes within about 15% of TQQQ, only contracts with a bid. Darker = higher ${esc(M.name.toLowerCase())}. Click a cell to open a sell ticket. ● = you hold it.</div>`;
+  $$("[data-cmt]").forEach(b => b.onclick = () => { ui.cmapType = b.dataset.cmt; drawChainMap(); });
+  $$("[data-cmm]").forEach(b => b.onclick = () => { ui.cmapMetric = b.dataset.cmm; drawChainMap(); });
+  $$("#chainMap td.hm").forEach(td => td.onclick = () => openTicket({expiry: td.dataset.e, strike: +td.dataset.k, type, action: "sell_to_open"}));
+}
+
 /* ---------- TICKET ---------- */
 let tk = null, tkData = null, tkSeq = 0;
 function openTicket(o) {
   if (o.close) { const p = st.positions.find(x => x.id === o.close);
     tk = {action: p.side === "short" ? "buy_to_close" : "sell_to_close", position_id: p.id, type: p.type, expiry: p.expiry, strike: p.strike, qty: p.open_qty, price: null, note: "", tags: [], close_note: ""}; }
-  else tk = {action: o.action || "sell_to_open", type: o.type, expiry: o.expiry, strike: o.strike, qty: 1, price: null, note: "", tags: [], compare: "dates"};
+  else tk = {action: o.action || "sell_to_open", type: o.type, expiry: o.expiry, strike: o.strike, qty: o.qty || 1, price: null, note: o.note || "", tags: [], compare: "dates"};
   tk.from = o.from || null;
   loadTicket(true);
 }
@@ -956,11 +1060,56 @@ async function openPosPanel(id) {
     ${short && p.type === "put" && p.dist < 0.03 ? `<div class="alert w" style="margin-top:10px"><span class=ic>${I("warn")}</span><span>${p.dist < 0 ? "In the money." : "Within 3% of the strike."}</span></div>` : ""}
     ${short ? posChances(p) : ""}
     <div id=posCone></div>
+    ${short ? `<div id=posRoll><button class="btn small" onclick="loadRollMap(${p.id})" data-tip="Map out rolling this option: buy it back, then sell a later one. Nothing is placed; each step opens its own ticket.">Map a roll…</button></div>` : ""}
     ${readingsTable(p.readings)}
     <div class=actions style="justify-content:space-between"><button class=btn onclick="closeDrawer();go('pos:${p.id}')" data-tip="Portfolio, with this position highlighted">Show in Portfolio</button>
       <span style="display:flex;gap:8px">${short ? `<button class=btn onclick="openTicket({expiry:'${p.expiry}',strike:${p.strike},type:'${p.type}',action:'sell_to_open',from:${p.id}})">Sell more</button>` : ""}
       <button class="btn primary" onclick="openTicket({close:${p.id},from:${p.id}})">Close position…</button></span></div></div>`;
   api("cone", {id: p.id, days_back: 30}).then(d => { if ($("#posCone") && !tk) drawCone($("#posCone"), d, true); });
+}
+
+/* ---------- ROLL MAP (v1.20.0) ---------- */
+async function loadRollMap(id) {
+  const el = $("#posRoll"); if (!el) return;
+  el.innerHTML = `<div class=meta style="margin-top:10px"><span class=spin>${I("spin")}</span> Mapping rolls…</div>`;
+  const r = await api("roll_map", {id});
+  if (!$("#posRoll")) return;
+  if (r.error) { el.innerHTML = `<div class=meta style="margin-top:10px">${esc(r.error)}</div>`; return; }
+  const p = r.position, what = p.type === "put" ? "put" : "call";
+  const net = c => `<span class="${c >= 0 ? "up" : "down"}">${c >= 0 ? "+" : "−"}${mc(Math.abs(c))} ${c >= 0 ? "credit" : "debit"}</span>`;
+  const rows = r.rolls.map((x, i) => `<tr><td class=l><b>${esc(x.label)}</b><div class=meta${x.chances ? ` data-tip="Breakeven at expiration: ${f2(x.chances.breakeven)}"` : ""}>${esc(x.move)} · ${plural(x.dte, "day")} out</div>
+    <div style="margin-top:4px;white-space:nowrap"><button class="btn small" data-rs1="${i}" data-tip="Opens the ticket to buy back ${esc(p.label)}. After you place it, the app reminds you of step 2.">1 Buy back</button> <button class="btn small" data-rs2="${i}" data-tip="Opens the ticket to sell ${esc(x.label)}, pre-filled. If you haven't bought the old one back yet, the ticket's rules apply as always.">2 Sell new</button></div></td>
+    <td style="white-space:nowrap">${net(x.net_c)}<div class=meta>sell at ${f2(x.price)}</div></td>
+    <td data-tip="Chance the new ${what} expires worthless, from its implied volatility (${x.iv ? (x.iv * 100).toFixed(0) + "%" : "n/a"}). An estimate, not a prediction.">${x.chances ? chPct(x.chances.worthless) : "—"}</td></tr>`).join("");
+  el.innerHTML = `<div class=rollmap><div class=meta style="margin:14px 0 4px;letter-spacing:.04em">ROLL MAP</div>
+    <div class=meta>Rolling means buying back the ${what} you hold, then selling a later one. This only maps the options: you place each step yourself, and the app's rules still apply to each.</div>
+    <div class=rstep><span class=rno>1</span><div><b>BUY to close</b> ${plural(p.qty, "contract")} · ${esc(p.label)}<div class=meta>about ${f2(r.close_px)} a share · ${mc(r.close_c)} to buy it back${p.type === "put" ? ` · frees ${mc(p.collateral_c)} collateral` : " · frees the shares"}</div></div></div>
+    <div class=rstep><span class=rno>2</span><div><b>SELL to open</b> one of these, a later ${what}<div class=meta>Prices are the middle of bid and ask. Net = what you receive for the new one minus what you pay to close the old one, for ${plural(p.qty, "contract")}.</div></div></div>
+    ${r.rolls.length ? `<table class=mini style="margin-top:6px"><thead><tr><th class=l>New ${what}</th><th>Net</th><th data-tip="Chance the new one expires worthless">Worthless</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class=meta style="margin-top:6px">No later expirations with a bid right now.</div>`}
+    <div class=meta style="margin-top:4px">${r.asof ? "Quotes from " + esc(r.asof) + (r.stale ? " (stale: market closed or quotes old)" : "") : ""}</div></div>`;
+  const start = (i, step) => {
+    const x = r.rolls[i], plan = {closeId: p.id, label: p.label, step2: {expiry: x.expiry, strike: x.strike, type: p.type, qty: p.qty, note: "Roll from " + p.label, label: x.label, price: x.price}};
+    ui.roll = plan;
+    if (step === 1) openTicket({close: p.id, from: p.id});
+    else openTicket({...plan.step2, action: "sell_to_open", from: p.id});
+  };
+  $$("[data-rs1]").forEach(b => b.onclick = () => start(+b.dataset.rs1, 1));
+  $$("[data-rs2]").forEach(b => b.onclick = () => start(+b.dataset.rs2, 2));
+}
+function rollAfterTrade(placed) {
+  const pl = ui.roll; if (!pl || !placed) return;
+  if (placed.action === "buy_to_close" && placed.position_id === pl.closeId) showRollNext(pl);
+  else if (placed.action === "sell_to_open" && placed.expiry === pl.step2.expiry && placed.strike === pl.step2.strike) { ui.roll = null; const b = $("#rollBox"); if (b) b.remove(); }
+}
+function showRollNext(pl) {
+  let box = $("#rollBox"); if (box) box.remove();
+  box = document.createElement("div"); box.id = "rollBox"; box.className = "remcard";
+  box.innerHTML = `<div class=remhd>${I("check")} Roll: step 1 done<span class=remx data-tip="Dismiss">${I("x")}</span></div><div>You bought back ${esc(pl.label)}.</div>
+    <div class=meta style="margin:4px 0 8px"><b>Step 2:</b> sell to open ${plural(pl.step2.qty, "contract")} · ${esc(pl.step2.label)}, about ${f2(pl.step2.price)} a share (the price will be re-quoted).</div>
+    <button class="btn primary small" id=rollGo>Open step 2 ticket</button>`;
+  document.body.appendChild(box);
+  box.querySelector(".remx").onclick = () => { box.remove(); ui.roll = null; };
+  $("#rollGo").onclick = () => { box.remove(); openTicket({...pl.step2, action: "sell_to_open", from: null}); };
 }
 
 function storyPanel(p) {
@@ -1192,7 +1341,9 @@ async function showConfirm() {
     const why = ($("#whyClosed") || {}).value || "";
     const res = await api("place", {order: {...tk, close_note: why}});
     if (res.error) { closeOverlay(); toast(`${I("x")} ${esc(res.error)}`, 6000); loadTicket(true); return; }
+    const placed = {...tk};
     closeOverlay(); closeDrawer(); toast(`${I("check")} Paper trade placed. It's in Portfolio and History.`); reload();
+    rollAfterTrade(placed);
   };
 }
 
@@ -1446,7 +1597,7 @@ async function renderSettings() {
       <span class=pill style="text-align:center">Click</span><span>pin the details</span>
       <span class=pill style="text-align:center">Double-click</span><span>jump to the related place <span class=meta>(<span class=lnk>dotted underline</span>)</span></span></div></div>
     <div class=row><label>Font</label><span class=meta>Inter, bundled with the app · ${fontOk ? "loaded " + I("check") : "using backup font"}</span></div>
-    <div class=row><label>Shortcuts</label><span class=meta><span class=kbd>1</span>–<span class=kbd>8</span> tabs · <span class=kbd>Esc</span> close · <span class=kbd>Enter</span> confirm</span></div></div>
+    <div class=row><label>Shortcuts</label><span class=meta><span class=kbd>1</span>–<span class=kbd>8</span> tabs · <span class=kbd>Ctrl</span>+<span class=kbd>K</span> search · <span class=kbd>Esc</span> close · <span class=kbd>Enter</span> confirm</span></div></div>
   <div class=card><h2 style="margin-top:0">Runs & app</h2>
     <div class=row><label>Current run</label><span>${s.run ? "Started " + esc(s.run.start) + " · " + mc(s.run.cash_c) : "none"}</span></div>
     <div class=row style="align-items:flex-start"><label>Past runs</label><span>${s.past.length ? s.past.map(r => `<div>${esc(r.start)} → ${esc(r.end)} · ${mc(r.final_c)} <button class="btn small" data-rexp="${r.id}">Save CSV…</button></div>`).join("") : `<span class=meta>none yet · closed runs' CSVs can be re-exported here</span>`}</span></div>

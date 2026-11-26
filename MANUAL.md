@@ -429,6 +429,17 @@ The top bar always shows:
 
 Double-click any of these to jump to the related screen.
 
+### Search and jump: Ctrl+K (v1.22.0)
+
+Press **Ctrl+K** (or Cmd+K) anywhere, even while typing in a box, to open a search bar. Type a few words and press **Enter** to go there; **↑ ↓** move, **Esc** closes. It finds:
+
+- **Tabs and your open positions** (empty search shows these first). Picking a position opens its details.
+- **Contracts:** type a strike with put or call and part of a date, such as `55 put dec`. Picking one opens a sell ticket for that contract; nothing is placed until you confirm it there, as always.
+- **Expirations:** type a date such as `dec 18` to open the Chain on that expiration.
+- **Settings, manual sections and a few actions** (refresh quotes, buy shares, back up now, add a calendar note).
+
+It only navigates and opens tickets. It never places a trade by itself.
+
 ### How the money is counted
 
 Your cash sits in two buckets:
@@ -531,6 +542,7 @@ The option chain for TQQQ: every strike with a bid, for one expiration at a time
 - **Vol** (volume) shows how many contracts of that strike traded today. Strikes that trade more usually have tighter bid–ask spreads, which matters for real fills.
 - **Click any bid, ask or mid** to open a ticket for that contract.
 - **Refresh** fetches the chain again.
+- **Strike × expiration map (v1.21.0)**, below the chain: one grid for the next eight expirations (columns) and the strikes within about 15% of TQQQ (rows), only contracts with a bid. Choose **Sell puts** or **Sell calls**, then what to shade by: **Annualized return** (premium, plus interest on a put's collateral, as a share of the collateral, if repeated back-to-back for a year), **Chance worthless** (the estimated chance the option you sell expires worthless, from its implied volatility), **IV**, or **Volume**. Darker means higher. A line marks where TQQQ is, in-the-money strikes are dimmed, and a ● means you hold that contract. Hover a cell for its bid, ask and all the numbers; **click it to open a sell ticket** for that contract. It's a way to see where the premium is, not a recommendation: a bigger annualized return usually comes with a lower chance of keeping it.
 
 ### The ticket
 
@@ -599,6 +611,14 @@ Double-click a position on Portfolio, or its gold dot in the Chain, to open its 
 - the market readings saved with each trade.
 
 Buttons: **Show in Portfolio** (Portfolio, with this position highlighted), **Sell more**, and **Close position…**.
+
+
+**Roll map (v1.20.0).** On a short option's panel, **Map a roll…** lays out what rolling it could look like. *Rolling* means buying back the option you hold and selling a later one; the map only shows the options, and you place every trade yourself. The app's rules (cash-secured puts, covered calls) still apply to each ticket.
+
+- **Step 1: BUY to close** the option you hold, with about what it costs to buy back, and what that frees (the put's collateral, or the shares).
+- **Step 2: SELL to open** one of the candidates: the next three expirations after yours, at the **same strike**, and at strikes about **2% and 5% further from the money** (lower for puts, higher for calls). For each: what you'd sell it at (the middle of bid and ask), the **net credit or debit** for all your contracts (new premium minus the cost to close), the estimated **chance it expires worthless**, and, on hover, its breakeven.
+- Each row has two buttons: **1 Buy back** opens the pre-filled ticket to close your option, and **2 Sell new** opens the pre-filled sell-to-open ticket for that candidate (with a note, "Roll from …"). After you place step 1 from a row, a card reminds you of step 2 and opens its ticket when you're ready; the price is re-quoted then.
+- Chances use implied volatility and are estimates, not predictions. A roll to a debit costs money for more time: the map shows it so you can decide.
 
 ### Expiration and settlement
 
