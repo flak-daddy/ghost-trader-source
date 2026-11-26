@@ -74,7 +74,7 @@ class App:
         out = {}
         for p in self.led.positions():
             try:
-                q = self.quotes.quote(p["expiry"], p["type"], p["strike"], fresh=False)
+                q = self.quotes.quote(p["expiry"], p["type"], p["strike"], fresh=False, symbol=p["symbol"])
                 if q:
                     out[str(p["id"])] = q["mid"]
             except Exception:  # noqa: BLE001
@@ -100,6 +100,18 @@ class App:
         except Exception:  # noqa: BLE001
             r = self.db.one("SELECT close FROM prices WHERE symbol=? ORDER BY day DESC LIMIT 1", (SYMBOL,))
             return r[0] if r else None
+
+    def spot(self, symbol=None):
+        """Latest price of `symbol` (TQQQ by default); falls back to the ledger's last price."""
+        if not symbol or symbol == SYMBOL:
+            return self.price()
+        try:
+            return self.quotes.symbol_quote(symbol)["last"]
+        except Exception:  # noqa: BLE001
+            try:
+                return self.led.price_of(symbol)
+            except Exception:  # noqa: BLE001
+                return None
 
     # ------------------------------------------------------------------ boot / lifecycle
     def api_boot(self):
@@ -175,16 +187,17 @@ class App:
         for p in self.led.positions():
             q = None
             try:
-                q = self.quotes.quote(p["expiry"], p["type"], p["strike"], fresh=False)
+                q = self.quotes.quote(p["expiry"], p["type"], p["strike"], fresh=False, symbol=p["symbol"])
             except Exception:  # noqa: BLE001
                 pass
+            Sp = S if p["symbol"] == SYMBOL else self.spot(p["symbol"])
             mark = q["mid"] if q else None
             sign = 1 if p["side"] == "short" else -1
             pnl = cents((p["open_price"] - mark) * 100 * p["open_qty"]) * sign if mark is not None else None
             prem = cents(p["open_price"]) * 100 * p["open_qty"]
             dte = (dt.date.fromisoformat(p["expiry"]) - today).days
-            dist = (S - p["strike"]) / p["strike"] if S else None
-            otm = (S > p["strike"]) if p["type"] == "put" else (S < p["strike"]) if S else None
+            dist = (Sp - p["strike"]) / p["strike"] if Sp else None
+            otm = (Sp > p["strike"]) if p["type"] == "put" else (Sp < p["strike"]) if Sp else None
             pos.append({**_pubpos(p), "mark": mark, "bid": q and q["bid"], "ask": q and q["ask"], "pnl_c": pnl,
                         "pnl_pct": (pnl / prem) if (pnl is not None and prem) else None,
                         "dte": dte, "dist": dist, "otm": otm, "quote_stale": q["stale"] if q else True})
@@ -196,7 +209,7 @@ class App:
             if dt.date.fromisoformat(p["expiry"]) <= sun:
                 alerts.append({"kind": "expiring", "pos": p})
         for p in pos:
-            if p["type"] == "put" and p["side"] == "short" and S and (S - p["strike"]) / p["strike"] < 0.03:
+            if p["type"] == "put" and p["side"] == "short" and p.get("dist") is not None and p["dist"] < 0.03:
                 alerts.append({"kind": "near", "pos": p})
         lots = [dict(lt) for lt in self.led.lots()]
         for lt in lots:
@@ -263,11 +276,30 @@ class App:
                 return e
         return exps[0] if exps else None
 
-    def api_chain(self, expiry=None, view=None):
+    def _chain_symbol(self, symbol):
+        """(symbol, error) for the Chain tab: a stock or ETF Yahoo has options for. Remembered between visits."""
+        s = watch.clean_symbol(symbol) if symbol else (self.settings.get("chain_symbol") or SYMBOL)
+        if not s:
+            return None, "That doesn't look like a ticker. Use letters, like SPY or BRK-B."
+        if watch.is_index(s):
+            return None, f"{s} is an index. Options here are on stocks and ETFs."
+        return s, None
+
+    def api_chain(self, expiry=None, view=None, symbol=None):
+        sym, err = self._chain_symbol(symbol)
+        if err:
+            return {"error": err, "symbol": self.settings.get("chain_symbol") or SYMBOL}
+        if sym != SYMBOL:
+            try:
+                self.quotes.symbol_quote(sym)          # must be something Yahoo has a quote for
+            except Exception as e:  # noqa: BLE001
+                return {"error": f"Couldn't find {sym}: {e}", "symbol": sym}
+        if symbol and sym != (self.settings.get("chain_symbol") or SYMBOL):
+            self.settings.update(chain_symbol=sym, chain_exp=None)
         try:
-            exps = self.quotes.expirations()
+            exps = self.quotes.expirations(symbol=sym)
         except Exception as e:  # noqa: BLE001
-            return {"error": f"No expiration list: {e}"}
+            return {"error": f"{sym} has no options list: {e}", "symbol": sym}
         if expiry and expiry not in exps:
             exps = sorted(set(exps) | {expiry})
         e = expiry or self._default_exp(exps)
@@ -276,25 +308,30 @@ class App:
         if view:
             self.settings.update(chain_view=view)
         try:
-            c = self.quotes.chain(e)
+            c = self.quotes.chain(e, symbol=sym)
         except Exception as ex:  # noqa: BLE001
-            return {"error": str(ex), "groups": self._exp_groups(exps), "expiry": e}
-        u = self.quotes.underlying()
-        held = [_pubpos(p) for p in self.led.positions() if p["expiry"] == e] if self.led.run() else []
+            return {"error": str(ex), "groups": self._exp_groups(exps), "expiry": e, "symbol": sym}
+        if sym == SYMBOL:
+            u = self.quotes.underlying()
+        else:
+            sq = self.quotes.symbol_quote(sym)
+            u = {"price": sq["last"], "prev_close": sq.get("prev_close")}
+        held = [_pubpos(p) for p in self.led.positions() if p["expiry"] == e and p["symbol"] == sym] if self.led.run() else []
         rows = {}
         for x in c["rows"]:
             rows.setdefault(x["strike"], {})[x["type"]] = {k: x.get(k) for k in ("bid", "ask", "mid", "delta", "iv", "volume")}
         strikes = [{"k": k, "call": v.get("call"), "put": v.get("put")} for k, v in sorted(rows.items())]
-        return {"expiry": e, "label": timeutil.fmt_exp(e), "groups": self._exp_groups(exps), "strikes": strikes,
+        return {"symbol": sym, "expiry": e, "label": timeutil.fmt_exp(e), "groups": self._exp_groups(exps), "strikes": strikes,
                 "price": u["price"], "prev_close": u.get("prev_close"), "stale": c["stale"] or not self._market()["open"],
                 "asof": timeutil.fmt_ct(c["asof"]), "market": self._market(), "held": held,
                 "view": self.settings.get("chain_view") or "both", "error": c.get("error")}
 
     # ------------------------------------------------------------------ command palette (v1.22.0)
-    def api_expirations(self):
+    def api_expirations(self, symbol=None):
         """Upcoming expirations for the command palette's contract search. Read-only."""
+        sym = watch.clean_symbol(symbol) if symbol else SYMBOL
         try:
-            exps = [e for e in self.quotes.expirations() if e >= timeutil.today_ct().isoformat()][:16]
+            exps = [e for e in self.quotes.expirations(symbol=sym or SYMBOL) if e >= timeutil.today_ct().isoformat()][:16]
         except Exception as e:  # noqa: BLE001
             return {"error": f"No expiration list: {e}", "items": []}
         today = timeutil.today_ct()
@@ -305,28 +342,32 @@ class App:
     MAP_EXPIRIES = 8
     MAP_BAND = 0.15
 
-    def api_chain_map(self):
+    def api_chain_map(self, symbol=None):
         """The strike x expiration map under the Chain: for the next few expirations and the strikes within about 15%
         of TQQQ, each short put's and call's annualized return, chance of expiring worthless, IV and volume. Read-only."""
         if not self.led.run():
             return {"error": "Start a run first."}
-        S = self.price()
+        sym, err = self._chain_symbol(symbol)
+        if err:
+            return {"error": err}
+        S = self.spot(sym)
         if not S:
-            return {"error": "No TQQQ price yet."}
+            return {"error": f"No {sym} price yet."}
         today = timeutil.today_ct()
         rate = self.rates.for_day(today) or 0.0
         try:
-            exps = [e for e in self.quotes.expirations() if e >= today.isoformat()][:self.MAP_EXPIRIES]
+            exps = [e for e in self.quotes.expirations(symbol=sym) if e >= today.isoformat()][:self.MAP_EXPIRIES]
         except Exception as e:  # noqa: BLE001
             return {"error": f"No expiration list: {e}"}
         held = {}
         for p in self.led.positions():
-            held[(p["expiry"], p["type"], p["strike"])] = p["id"]
+            if p["symbol"] == sym:
+                held[(p["expiry"], p["type"], p["strike"])] = p["id"]
         lo, hi = S * (1 - self.MAP_BAND), S * (1 + self.MAP_BAND)
         cols, cells, strikes, stale, asof = [], {"put": {}, "call": {}}, set(), False, None
         for e in exps:
             try:
-                c = self.quotes.chain(e)
+                c = self.quotes.chain(e, symbol=sym)
             except Exception as ex:  # noqa: BLE001
                 log.warning("chain map %s: %s", e, ex)
                 continue
@@ -349,7 +390,7 @@ class App:
                     "ann": ret * 365 / max(dte, 1), "ret": ret, "worthless": ch and ch["worthless"],
                     "held": held.get((e, typ, k))}
                 strikes.add(k)
-        return {"price": S, "cols": cols, "strikes": sorted(strikes), "cells": cells,
+        return {"symbol": sym, "price": S, "cols": cols, "strikes": sorted(strikes), "cells": cells,
                 "asof": asof and timeutil.fmt_ct(asof), "stale": stale or not self._market()["open"]}
 
     # ------------------------------------------------------------------ ticket
@@ -368,8 +409,8 @@ class App:
             return self.quotes.symbol_quote(o.get("symbol") or SYMBOL, fresh=fresh)
         if o.get("position_id") and o["action"] in ("buy_to_close", "sell_to_close"):
             p = self.led.position(int(o["position_id"]))
-            o.update(type=p["type"], expiry=p["expiry"], strike=p["strike"])
-        return self.quotes.quote(o["expiry"], o["type"], o["strike"], fresh=fresh)
+            o.update(type=p["type"], expiry=p["expiry"], strike=p["strike"], symbol=p["symbol"])
+        return self.quotes.quote(o["expiry"], o["type"], o["strike"], fresh=fresh, symbol=o.get("symbol") or SYMBOL)
 
     @staticmethod
     def default_fill(q, side):
@@ -426,7 +467,7 @@ class App:
             q = self._quote_for(o, fresh)
         except Exception as e:  # noqa: BLE001
             return {"error": f"Couldn't get a quote for {o['symbol']}: {e}"}
-        S = self.price()
+        S = self.spot(o["symbol"])
         side = "sell" if o["action"] in ("sell_to_open", "sell_to_close", "sell_shares") else "buy"
         if q and o.get("price") in (None, ""):
             o["price"] = self.default_fill(q, side)
@@ -465,13 +506,13 @@ class App:
                                  "dte": dte, "rate": rate / 100, "covered": o["type"] == "call", "expiry": o["expiry"]}
         # strikes available (with a bid) for this expiry/type, and the expiration list
         try:
-            c = self.quotes.chain(o["expiry"])
+            c = self.quotes.chain(o["expiry"], symbol=o["symbol"])
             out["strikes"] = sorted({x["strike"] for x in c["rows"] if x["type"] == o["type"] and (x["bid"] or 0) > 0}
                                     | {k})
         except Exception:  # noqa: BLE001
             out["strikes"] = [k]
         try:
-            out["groups"] = self._exp_groups(self.quotes.expirations())
+            out["groups"] = self._exp_groups(self.quotes.expirations(symbol=o["symbol"]))
         except Exception:  # noqa: BLE001
             out["groups"] = []
         if o["action"] == "sell_to_open":
@@ -482,17 +523,18 @@ class App:
         rows = []
         today = timeutil.today_ct()
         if mode == "dates":
-            exps = [e for e in self.quotes.expirations() if dt.date.fromisoformat(e).weekday() in (3, 4)][:6]
+            exps = [e for e in self.quotes.expirations(symbol=o["symbol"])
+                    if dt.date.fromisoformat(e).weekday() in (3, 4)][:6]
             for e in exps:
                 try:
-                    q = self.quotes.quote(e, o["type"], k, fresh=False)
+                    q = self.quotes.quote(e, o["type"], k, fresh=False, symbol=o["symbol"])
                 except Exception:  # noqa: BLE001
                     q = None
                 d = (dt.date.fromisoformat(e) - today).days
                 rows.append(self._cmp_row(q, o["type"], k, d, rate, S, exp=e, label=timeutil.fmt_exp(e)))
         else:
             try:
-                c = self.quotes.chain(o["expiry"])
+                c = self.quotes.chain(o["expiry"], symbol=o["symbol"])
             except Exception:  # noqa: BLE001
                 return {"mode": mode, "rows": []}
             ks = sorted({x["strike"] for x in c["rows"] if x["type"] == o["type"] and (x["bid"] or 0) > 0})
@@ -534,7 +576,7 @@ class App:
             return {"error": f"Couldn't re-quote: {e}"}
         if q is None:
             return {"error": "No quote for this contract right now."}
-        S = self.price()
+        S = self.spot(o["symbol"])
         chk = self.led.check(o, q, S)
         moved = bool(shown) and (abs((shown.get("bid") or 0) - (q["bid"] or 0)) > 1e-9 or
                                  abs((shown.get("ask") or 0) - (q["ask"] or 0)) > 1e-9)
@@ -548,7 +590,7 @@ class App:
             words = {"sell_to_open": "SELL TO OPEN", "buy_to_open": "BUY TO OPEN", "buy_to_close": "BUY TO CLOSE",
                      "sell_to_close": "SELL TO CLOSE"}[no["action"]]
             e = dt.date.fromisoformat(o["expiry"])
-            title = f"{words} {no['qty']} × {SYMBOL} {e.strftime('%a %b %d %Y')} {strike_txt(float(o['strike']))} " \
+            title = f"{words} {no['qty']} × {o['symbol']} {e.strftime('%a %b %d %Y')} {strike_txt(float(o['strike']))} " \
                     f"{'Put' if o['type'] == 'put' else 'Call'}"
         pos = self.led.position(no["position_id"]) if no.get("position_id") else None
         return {"ok": ok, "msg": msg, "warn": chk["warn"], "effects": chk["effects"], "quote": q, "moved": moved,
@@ -563,7 +605,7 @@ class App:
             return {"error": err}
         try:
             q = self._quote_for(o, fresh=False)
-            res = self.led.place(o, q, self.price())
+            res = self.led.place(o, q, self.spot(o["symbol"]))
         except TradeError as e:
             return {"error": str(e)}
         except Exception as e:  # noqa: BLE001
@@ -573,7 +615,7 @@ class App:
         if o.get("action") == "sell_to_open" and q:
             try:
                 dte = (dt.date.fromisoformat(o["expiry"]) - timeutil.today_ct()).days
-                ch = self._chances(o["type"], self.price(), float(o["strike"]), float(o["price"]), dte, q.get("iv"),
+                ch = self._chances(o["type"], self.spot(o["symbol"]), float(o["strike"]), float(o["price"]), dte, q.get("iv"),
                                    self.rates.for_day(timeutil.today_ct()), q.get("iv_src"))
                 extra = {"chances": ch} if ch else None
             except Exception:  # noqa: BLE001
@@ -636,7 +678,7 @@ class App:
     # ------------------------------------------------------------------ indicators
     def api_indicators(self, range="5Y", refresh=False, symbol=None):
         """Five years of everything; each chart group on the tab slices its own range. `symbol` (v1.18.0) is TQQQ or
-        a tracked symbol: price and stochastics are that symbol's; implied volatility and your trades are TQQQ-only."""
+        a tracked symbol: price and stochastics are that symbol's; implied volatility is TQQQ-only, and your trades are that symbol's own."""
         months = 60
         sym = watch.clean_symbol(symbol) or SYMBOL
         if sym != SYMBOL and sym not in watch.clean_list(self.settings.get("watchlist")):
@@ -653,7 +695,7 @@ class App:
         v["symbol"] = sym
         v["symbols"] = [SYMBOL] + watch.clean_list(self.settings.get("watchlist"))
         v.update(self._vol_series(v["days"], v["close"], with_iv=sym == SYMBOL))
-        v["trades"] = self._trade_days(v["days"][0] if v["days"] else None) if sym == SYMBOL else {}
+        v["trades"] = self._trade_days(v["days"][0] if v["days"] else None, sym)
         for st in v["status"].values():
             if st["at"]:
                 st["at_txt"] = timeutil.fmt_ct(st["at"], with_date=True)
@@ -685,16 +727,24 @@ class App:
                    "hv": next((x for x in reversed(hv) if x is not None), None)}
         return {"iv": iv, "hv": hv, "ivnow": now}
 
-    def _trade_days(self, since=None):
-        """This run's trades, assignments and expirations by day (CT), for the Indicators trade layer."""
+    def _trade_days(self, since=None, symbol=SYMBOL):
+        """This run's trades, assignments and expirations of `symbol` by day (CT), for the Indicators trade layer.
+        An event's symbol is in its data (share trades), else its option's, else TQQQ (older events)."""
         r = self.led.run()
         if not r:
             return {}
         out = {}
         kinds = {"Trade": "trade", "Shares": "trade", "Assigned": "assign", "Called away": "assign", "Expired": "expire",
                  "Exercised": "assign"}
-        for e in self.db.q("SELECT ts, kind, title FROM events WHERE run_id=? AND kind IN (%s) ORDER BY ts" %
+        for e in self.db.q("SELECT e.ts, e.kind, e.title, e.data, p.symbol FROM events e LEFT JOIN positions p "
+                           "ON p.id=e.position_id WHERE e.run_id=? AND e.kind IN (%s) ORDER BY e.ts" %
                            ",".join("?" * len(kinds)), (r["id"], *kinds)):
+            try:
+                esym = json.loads(e[3] or "{}").get("symbol")
+            except ValueError:
+                esym = None
+            if (esym or e[4] or SYMBOL) != symbol:
+                continue
             day = timeutil.parse(e[0]).astimezone(timeutil.CT).date().isoformat()
             if since and day < since:
                 continue
@@ -743,10 +793,10 @@ class App:
             return {"error": "Position not found."}
         if p["status"] != "open":
             return self._position_story(p)
-        S = self.price()
+        S = self.spot(p["symbol"])
         q = None
         try:
-            q = self.quotes.quote(p["expiry"], p["type"], p["strike"], fresh=False)
+            q = self.quotes.quote(p["expiry"], p["type"], p["strike"], fresh=False, symbol=p["symbol"])
         except Exception:  # noqa: BLE001
             pass
         rate = self.rates.for_day(timeutil.today_ct()) or 0
@@ -1371,7 +1421,7 @@ class App:
         if "ind_trades" in kw:
             kw["ind_trades"] = bool(kw["ind_trades"])
         self.settings.update(**kw)
-        changed = [k for k in kw if old.get(k) != self.settings.get(k) and k not in ("chain_exp", "chain_view", "theme", "ind_ranges", "out_range", "ind_trades")]
+        changed = [k for k in kw if old.get(k) != self.settings.get(k) and k not in ("chain_exp", "chain_view", "chain_symbol", "theme", "ind_ranges", "out_range", "ind_trades")]
         if changed and self.led.run():
             nice = {"av_key": "Alpha Vantage key", "manual_rate": "manual rate", "haircut": "haircut",
                     "long_options": "buying options to open"}
@@ -1512,18 +1562,29 @@ class App:
         return self._save_text(r["csv_name"], r["csv_text"])
 
     # ------------------------------------------------------------------ probability cones (v1.10.0)
-    def api_cone(self, id=None, days_back=60, type=None, strike=None, expiry=None, iv=None):
+    def api_cone(self, id=None, days_back=60, type=None, strike=None, expiry=None, iv=None, symbol=None):
         """What the cone charts need: recent TQQQ closes, today's price, the IV the cone uses, and the open options
         to draw against it (one position for the panel's mini cone, all of them for Portfolio). With type/strike/
         expiry (and the quote's iv), it's the ticket's mini cone for an option you haven't sold yet (v1.12.3)."""
-        S = self.price()
+        sym = watch.clean_symbol(symbol) if symbol else SYMBOL
+        if id is not None and not symbol and self.led.run():
+            pp = self.led.position(int(id))
+            sym = pp["symbol"] if pp else SYMBOL
+        sym = sym or SYMBOL
+        S = self.spot(sym)
         if not S:
-            return {"error": "No TQQQ price yet."}
+            return {"error": f"No {sym} price yet."}
         today = timeutil.today_ct()
         since = (today - dt.timedelta(days=int(days_back))).isoformat()
-        bars = (self.ind.data.get("tqqq") or {}).get("value") or []
+        bars = (self.ind.data.get("tqqq") or {}).get("value") or [] if sym == SYMBOL else []
         closes = [(b["day"], b["close"]) for b in sorted(bars, key=lambda b: b["day"]) if b["day"] >= since]
-        if len(closes) < 5:
+        if sym != SYMBOL:
+            try:
+                got = self.provider.daily_closes(dt.date.fromisoformat(since), today, symbol=sym)
+                closes = sorted((d, c) for d, c in got.items())
+            except Exception as e:  # noqa: BLE001
+                log.warning("cone closes %s: %s", sym, e)
+        if len(closes) < 5 and sym == SYMBOL:
             closes = [(r[0], r[1]) for r in self.db.q("SELECT day, close FROM prices WHERE symbol=? AND day>=? ORDER BY day",
                                                      (SYMBOL, since))]
         if closes and closes[-1][0] == today.isoformat():
@@ -1531,7 +1592,7 @@ class App:
         else:
             closes.append((today.isoformat(), S))
         prospect = strike is not None and expiry and type in ("put", "call")
-        ps = [] if prospect else self.led.positions()
+        ps = [] if prospect else [p for p in self.led.positions() if p["symbol"] == sym]
         if id is not None:
             ps = [p for p in ps if p["id"] == int(id)]
         pos, ivs = [], []
@@ -1547,7 +1608,7 @@ class App:
         for p in ps:
             q = None
             try:
-                q = self.quotes.quote(p["expiry"], p["type"], p["strike"], fresh=False)
+                q = self.quotes.quote(p["expiry"], p["type"], p["strike"], fresh=False, symbol=sym)
             except Exception:  # noqa: BLE001
                 pass
             iv = (q or {}).get("iv")
@@ -1556,7 +1617,7 @@ class App:
             pos.append({"id": p["id"], "type": p["type"], "side": p["side"], "strike": p["strike"], "expiry": p["expiry"],
                         "qty": p["open_qty"], "label": f"{timeutil.fmt_exp(dt.date.fromisoformat(p['expiry']))} {strike_txt(p['strike'])} {p['type'].title()}",
                         "dte": (dt.date.fromisoformat(p["expiry"]) - today).days, "iv": iv})
-        hist = ivhist.history(self.db, (today - dt.timedelta(days=10)).isoformat())
+        hist = ivhist.history(self.db, (today - dt.timedelta(days=10)).isoformat()) if sym == SYMBOL else []
         if id is not None and ivs:
             iv, src = ivs[0], "this option's IV"
         elif hist:
@@ -1564,9 +1625,9 @@ class App:
         elif ivs:
             iv, src = sum(ivs) / len(ivs), "the average IV of your open options"
         else:
-            iv, src = 0.6, "a typical IV for TQQQ (no quote yet)"
+            iv, src = (0.6, "a typical IV for TQQQ (no quote yet)") if sym == SYMBOL else (0.4, f"a typical IV for {sym} (no quote yet)")
         horizon = max([p["dte"] for p in pos] + [30 if id is None else 1])
-        return {"today": today.isoformat(), "price": S, "closes": closes, "iv": iv, "iv_src": src,
+        return {"symbol": sym, "today": today.isoformat(), "price": S, "closes": closes, "iv": iv, "iv_src": src,
                 "rate": (self.rates.for_day(today) or 0) / 100, "horizon": horizon, "positions": pos}
 
     # ------------------------------------------------------------------ roll map (v1.20.0)
@@ -1579,11 +1640,12 @@ class App:
         p = self.led.position(int(id)) if self.led.run() else None
         if not p or p["status"] != "open" or p["side"] != "short":
             return {"error": "Roll maps are for open short options."}
-        S = self.price()
+        sym = p["symbol"]
+        S = self.spot(sym)
         today = timeutil.today_ct()
         rate = self.rates.for_day(today) or 0.0
         try:
-            q0 = self.quotes.quote(p["expiry"], p["type"], p["strike"], fresh=False)
+            q0 = self.quotes.quote(p["expiry"], p["type"], p["strike"], fresh=False, symbol=sym)
         except Exception as e:  # noqa: BLE001
             return {"error": f"Couldn't get a quote for {p['label']}: {e}"}
         if not q0 or not q0.get("ask"):
@@ -1591,14 +1653,14 @@ class App:
         close_px = self.default_fill(q0, "buy")
         qty, typ, k0 = p["open_qty"], p["type"], p["strike"]
         try:
-            exps = [e for e in self.quotes.expirations() if e > p["expiry"]][:self.ROLL_EXPIRIES]
+            exps = [e for e in self.quotes.expirations(symbol=sym) if e > p["expiry"]][:self.ROLL_EXPIRIES]
         except Exception as e:  # noqa: BLE001
             return {"error": f"No expiration list: {e}"}
         safer = -1 if typ == "put" else 1           # puts roll down, calls roll up: further from the money
         rolls, asof, stale = [], None, bool(q0.get("stale"))
         for e in exps:
             try:
-                c = self.quotes.chain(e)
+                c = self.quotes.chain(e, symbol=sym)
             except Exception as ex:  # noqa: BLE001
                 log.warning("roll map %s: %s", e, ex)
                 continue
@@ -1626,7 +1688,7 @@ class App:
                               "collateral_c": cents(k * 100 * qty) if typ == "put" else None,
                               "chances": self._chances(typ, S, k, px, dte, x.get("iv"), rate), "iv": x.get("iv"),
                               "label": f"{timeutil.fmt_exp(e)} {strike_txt(k)} {typ.title()}"})
-        return {"position": {"id": p["id"], "label": p["label"], "type": typ, "strike": k0, "expiry": p["expiry"], "qty": qty,
+        return {"symbol": sym, "position": {"id": p["id"], "symbol": sym, "label": p["label"], "type": typ, "strike": k0, "expiry": p["expiry"], "qty": qty,
                              "dte": (dt.date.fromisoformat(p["expiry"]) - today).days, "collateral_c": p["collateral_c"],
                              "open_price": p["open_price"]},
                 "S": S, "close_px": close_px, "close_c": cents(close_px * 100 * qty), "rolls": rolls,
@@ -1792,11 +1854,11 @@ class App:
             self.quotes.underlying(fresh=True)
         except Exception as e:  # noqa: BLE001
             errs.append(str(e))
-        for exp in sorted({p["expiry"] for p in self.led.positions()}):
+        for sym, exp in sorted({(p["symbol"], p["expiry"]) for p in self.led.positions()}):
             try:
-                self.quotes.chain(exp, fresh=True)
+                self.quotes.chain(exp, fresh=True, symbol=sym)
             except Exception as e:  # noqa: BLE001
-                errs.append(f"{exp}: {e}")
+                errs.append(f"{sym} {exp}: {e}")
         try:
             self._watch_snap(watch.clean_list(self.settings.get("watchlist")), refresh=True)
         except Exception:  # noqa: BLE001
@@ -1865,10 +1927,14 @@ class App:
                 "options": [["stoch14", "Stochastic 14,3,3"], ["stoch30", "30-day"], ["stoch60", "60-day"],
                             ["stoch180", "180-day"], ["vix", "VIX"], ["fg", "Fear & Greed"]]}
 
-    def api_refresh_quote(self, expiry, type, strike):
+    def api_refresh_quote(self, expiry, type, strike, symbol=None):
         try:
-            self.quotes.chain(expiry, fresh=True)
-            self.quotes.underlying(fresh=True)
+            sym = watch.clean_symbol(symbol) if symbol else SYMBOL
+            self.quotes.chain(expiry, fresh=True, symbol=sym or SYMBOL)
+            if sym and sym != SYMBOL:
+                self.quotes.symbol_quote(sym, fresh=True)
+            else:
+                self.quotes.underlying(fresh=True)
             return {"ok": True}
         except Exception as e:  # noqa: BLE001
             return {"error": str(e)}
@@ -1898,7 +1964,7 @@ def intr_full(coll_c, rate, days):
 def _pubpos(p):
     if not p:
         return None
-    return {k: p[k] for k in ("id", "type", "side", "expiry", "strike", "qty", "open_qty", "open_price", "status",
+    return {k: p[k] for k in ("id", "symbol", "type", "side", "expiry", "strike", "qty", "open_qty", "open_price", "status",
                               "collateral_c", "note", "lot_id", "label", "tags", "realized_c")} | {
         "opened": timeutil.fmt_date(timeutil.parse(p["opened_at"]).astimezone(timeutil.CT).date()),
         "exp_label": timeutil.fmt_exp(p["expiry"]),

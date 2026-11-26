@@ -63,10 +63,12 @@ def test_covered_calls_only_lock_their_own_symbol(led):
     _buy(led, "TQQQ", 100)
     _buy(led, "SPY", 50)
     assert led.free_shares("SPY") == 50 and led.locked_shares("SPY") == 0
-    # an order for SPY options is refused for now
-    with pytest.raises(TradeError, match="TQQQ-only"):
-        led.place({"action": "sell_to_open", "symbol": "SPY", "type": "call", "expiry": "2030-01-18", "strike": 120.0,
-                   "qty": 1, "price": 1.0}, {"bid": .9, "ask": 1.1}, 50.0)
+    # 50 SPY can't cover a call (it needs 100); TQQQ's shares don't count towards SPY's cover
+    exp = (timeutil.today_ct() + dt.timedelta(days=30)).isoformat()
+    order = {"action": "sell_to_open", "symbol": "SPY", "type": "call", "expiry": exp, "strike": 120.0, "qty": 1,
+             "price": 1.0}
+    with pytest.raises(TradeError, match="Not covered: you hold 50 SPY"):
+        led.place(order, {"bid": .9, "ask": 1.1}, 50.0)
 
 
 def test_dividends_are_per_symbol(led):

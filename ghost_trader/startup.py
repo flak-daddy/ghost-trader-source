@@ -274,12 +274,13 @@ class Startup:
             return "no run yet"
         now = timeutil.now()
         done = []
-        for exp in a.led.due_expirations(now):
-            def fetch(exp=exp):
-                closes = a.provider.daily_closes(exp, exp)
+        for sym, exp in a.led.due_settlements(now):
+            def fetch(exp=exp, sym=sym):
+                closes = (a.provider.daily_closes(exp, exp) if sym == SYMBOL
+                          else a.provider.daily_closes(exp, exp, symbol=sym))
                 c = closes.get(exp.isoformat())
                 if not c:
-                    raise RuntimeError(f"no official close for {timeutil.fmt_date(exp)} yet")
+                    raise RuntimeError(f"no official {sym} close for {timeutil.fmt_date(exp)} yet")
                 return c
 
             def choose(choice, value, exp=exp):
@@ -288,20 +289,20 @@ class Startup:
                     if v <= 0:
                         raise ValueError("Enter the closing price, like 56.56")
                     return v
-                a.log_error(f"Expiration not settled ({timeutil.fmt_date(exp)})",
-                            f"Couldn't get {SYMBOL}'s official close for {timeutil.fmt_date(exp)}.",
+                a.log_error(f"Expiration not settled ({sym} {timeutil.fmt_date(exp)})",
+                            f"Couldn't get {sym}'s official close for {timeutil.fmt_date(exp)}.",
                             "Left those positions open; they settle at a later startup.",
                             "Enter the closing price when asked, or wait for the next startup.", warning=True)
                 return None
 
-            close = self._retry(fetch, "settle", f"Couldn't get the {timeutil.fmt_date(exp)} close",
-                                f"Needed to settle positions expiring {timeutil.fmt_exp(exp)}.",
-                                [{"id": "close", "label": f"Use this {SYMBOL} close", "input": "56.56", "primary": True},
+            close = self._retry(fetch, "settle", f"Couldn't get the {sym} {timeutil.fmt_date(exp)} close",
+                                f"Needed to settle {sym} positions expiring {timeutil.fmt_exp(exp)}.",
+                                [{"id": "close", "label": f"Use this {sym} close", "input": "56.56", "primary": True},
                                  {"id": "retry", "label": "Retry"}, {"id": "skip", "label": "Skip"}], choose)
             if close is None:
                 continue
-            evs = a.led.settle_expiration(exp, close, now)
-            done.append(f"{timeutil.fmt_date(exp)}: {len(evs)} settled")
+            evs = a.led.settle_expiration(exp, close, now, symbol=sym)
+            done.append(f"{sym} {timeutil.fmt_date(exp)}: {len(evs)} settled")
         # dividends
         r = a.led.run()
         try:
@@ -347,7 +348,7 @@ class Startup:
 
     def _split_dialog(self, d, ratio, symbol=SYMBOL):
         a = self.app
-        aff = a.led.positions() if symbol == SYMBOL else []     # options are TQQQ-only
+        aff = [p for p in a.led.positions() if p["symbol"] == symbol]     # this symbol's options
         lots = a.led.lots(symbol=symbol)     # only this symbol's lots are adjusted
         lines = [f"{p['label']} ({p['open_qty']}) → strike ${p['strike'] / ratio:.2f}, {p['open_qty']} contracts of "
                  f"{int(100 * ratio)} shares" for p in aff]
@@ -379,18 +380,18 @@ class Startup:
         pos = a.led.positions()
         if not pos:
             return "no open positions"
-        exps = sorted({p["expiry"] for p in pos})
+        keys = sorted({(p["symbol"], p["expiry"]) for p in pos})
         fresh, stale = 0, []
         try:
             a.quotes.underlying(fresh=True)
         except Exception:  # noqa: BLE001
             pass
-        for e in exps:
-            held = [p for p in pos if p["expiry"] == e]
+        for sym, e in keys:
+            held = [p for p in pos if p["expiry"] == e and p["symbol"] == sym]
             bad = held
             for _ in range(2):
                 try:
-                    got = a.quotes.chain(e, fresh=True)
+                    got = a.quotes.chain(e, fresh=True, symbol=sym)
                     bad = _not_refreshed(got, held)
                     if not bad:
                         break

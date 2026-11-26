@@ -7,7 +7,7 @@ numbers are the options' premium (net of buy-backs) plus the gain or loss on the
 """
 import datetime as dt
 
-from . import timeutil
+from . import SYMBOL, timeutil
 from .ledger import cents
 
 
@@ -32,7 +32,7 @@ def cycles(led, share_price=None):
         coll = cents(k) * 100 * qty
         start = _day(p["opened_at"])
         steps = [{"day": start.isoformat(), "text": f"Sold {qty} × ${k:g} put", "c": cents(p["open_price"]) * 100 * qty}]
-        cyc = {"id": p["id"], "put_id": p["id"], "qty": qty, "strike": k, "expiry": p["expiry"], "collateral_c": coll,
+        cyc = {"id": p["id"], "put_id": p["id"], "symbol": p["symbol"], "qty": qty, "strike": k, "expiry": p["expiry"], "collateral_c": coll,
                "start": start.isoformat(), "put_c": put_c, "call_c": 0, "share_c": 0, "calls": 0, "lot_id": None,
                "shares": 0, "cost": None, "breakeven": None, "open_calls": 0}
         if p["status"] == "open":
@@ -73,8 +73,9 @@ def cycles(led, share_price=None):
                 per_share = prem_c / 100 / (qty * 100)
                 cyc.update(call_c=call_c, share_c=share_c, breakeven=round(cost - per_share, 2))
                 if lot["open_qty"] > 0:
-                    if share_price:
-                        cyc["unreal_c"] = cents((share_price - cost) * lot["open_qty"])
+                    sp = share_price if p["symbol"] == SYMBOL else led.price_of(p["symbol"])
+                    if sp:
+                        cyc["unreal_c"] = cents((sp - cost) * lot["open_qty"])
                     cyc.update(open=True, stage="Covered call" if cyc["open_calls"] else "Holding shares", outcome=None)
                     end = today
                 else:
@@ -90,7 +91,8 @@ def cycles(led, share_price=None):
                    ret=pnl / coll if coll else None, ann=(pnl / coll) * 365 / max(days, 1) if coll else None,
                    win=pnl > 0, steps=steps, start_txt=timeutil.fmt_date(start.isoformat()),
                    end_txt=None if cyc["open"] else timeutil.fmt_date(end.isoformat()),
-                   label=f"${k:g} put · exp {timeutil.fmt_exp(dt.date.fromisoformat(p['expiry']))}")
+                   label=(f"{p['symbol']} " if p["symbol"] != SYMBOL else "") +
+                   f"${k:g} put · exp {timeutil.fmt_exp(dt.date.fromisoformat(p['expiry']))}")
         out.append(cyc)
     return out
 

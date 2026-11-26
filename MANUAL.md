@@ -294,7 +294,7 @@ The fund rebalances once a day, but the market can move a lot between one close 
 
 Ghost Trader's **Indicators** tab shows three common ways traders read the market: the stochastic oscillator on TQQQ, the VIX, and CNN's Fear & Greed index, plus TQQQ's own implied volatility. This part explains what each one measures. None of them predicts prices. They describe where things stand right now compared with the recent past.
 
-**Other symbols (v1.18.0).** A *Symbol* row at the top of the tab switches it to any symbol on your tracked list: the price, the stochastics and the realized volatility are then that symbol's, and the VIX and Fear & Greed stay the same. Implied volatility (the IV tile and the implied line) and your trades are TQQQ-only, so they're hidden for other symbols. The readings saved with each trade you place are always TQQQ's, whichever symbol you're looking at. Opening a trade from History or a position takes you back to TQQQ.
+**Other symbols (v1.18.0).** A *Symbol* row at the top of the tab switches it to any symbol on your tracked list: the price, the stochastics and the realized volatility are then that symbol's, and the VIX and Fear & Greed stay the same. Implied volatility (the IV tile and the implied line) is TQQQ-only, so it's hidden for other symbols. **Your trades** (v1.23.0) show for whichever symbol you're looking at, using that symbol's own trades only. The readings saved with each trade you place are always TQQQ's, whichever symbol you're looking at. Opening a trade from History or a position takes you back to TQQQ.
 
 ### The stochastic oscillator
 
@@ -388,7 +388,7 @@ It is:
 
 - **Paper money only.** Nothing is ever sent to a broker.
 - **Real quotes, delayed.** Option chains and the TQQQ price come from Yahoo Finance and are about 15 minutes behind during market hours.
-- **Options are TQQQ only; shares can be any stock or ETF (v1.19.0).**
+- **Shares and options can be on any stock or ETF (v1.19.0 shares, v1.23.0 options).** The rules are the same for every symbol: puts are cash-secured, calls are covered, and there is no uncovered or unsecured selling.
 - **Strict.** Every trade is checked against the rules before you can confirm it, and there's no undo.
 
 It is not a perfect simulator. Things it doesn't model:
@@ -466,8 +466,9 @@ The main screen. From top to bottom:
 
 - **Account value** counts every symbol you hold at its latest price (cached about a minute), so it moves with all of them. Missed days are estimated using each symbol's daily closes.
 - **Dividends** on any symbol you hold are credited at startup, like TQQQ's (once per symbol and ex-date). A **split** asks what to do, per symbol, the same way TQQQ's does, and only changes that symbol's lots.
-- **Options stay TQQQ only for now.** Covered calls need 100 shares of the same symbol, and an option order for another symbol is refused. Selling shares you hold of another symbol doesn't touch any TQQQ call.
-- The indicator readings saved with a trade are TQQQ's, so they aren't saved on trades in other symbols.
+- **Options on any symbol (v1.23.0).** Sell a put on SPY (cash-secured, like TQQQ's) or a covered call (needs 100 free shares of that same symbol; TQQQ shares never cover a SPY call). Each position is quoted from its own symbol's chain and measured against its own symbol's price (distance from the strike, near-the-money alerts, the cone, the roll map). Selling shares you hold of one symbol doesn't touch another symbol's calls.
+- **Settlement is per symbol.** At startup each expiration settles at that symbol's official 3:00 PM CT close: a put in the money is assigned (you get that symbol's shares), a call in the money is called away, and an unfilled close prompt names the symbol. Expiry-day and end-of-day notifications name each symbol.
+- The indicator readings saved with a trade are TQQQ's, so they aren't saved on trades in other symbols. Implied-volatility history, the buy-and-hold comparison and the indicator alerts stay TQQQ's.
 - **Wheel cycles (v1.13.0):** every trip around the wheel that's still going (see *Wheel cycles* below), with a quick summary: open cycles, success rate, profit on finished cycles and full wheels, plus a link to the finished ones on Performance.
 - **Where TQQQ could go:** TQQQ's last few months, then a shaded cone from today out to your latest expiration. The inner band (the brighter one in dark mode, the deeper one in light mode) is where TQQQ would end up about 68% of the time if it moves as its implied volatility says; the outer band, inner included, about 95%. Each open option is drawn as its strike, from today to its expiration (puts in amber, calls in green). Hover the past for a close. Hover the future and a box says what the cone means for that date: in the inner band, "about 68% chance TQQQ closes between $a and $b at the close on Fri, Dec 4"; in the outer band, the 95% range (and the 14% on that side); outside the cone, the chance it closes beyond the edge; on one of your strike lines, the chance TQQQ closes below a put's strike (or above a call's) on that date. The date snaps to the nearest weekday. The cone uses TQQQ's 30-day at-the-money IV (saved daily since v1.9.0). It says how far TQQQ might move, not which way.
 - A link to the **calendar**, which moved to the Market tab in v1.12.0.
@@ -533,8 +534,9 @@ A reminder can also be **at its time**: give the note or event a time (like 1:15
 
 ### Chain
 
-The option chain for TQQQ: every strike with a bid, for one expiration at a time.
+The option chain for TQQQ, or for any stock or ETF Yahoo lists options on (v1.23.0): every strike with a bid, for one expiration at a time.
 
+- **Symbol box (v1.23.0):** type a ticker (SPY, AAPL, BRK-B…) and press Enter, or tap one of your tracked symbols. The app checks that Yahoo has a quote and options for it, and remembers the symbol you last viewed. Indexes such as ^GSPC can be watched but have no tradable options here, so they're refused. A symbol you trade is added to your tracked list.
 - **Expiration picker:** grouped by week and month, with days to expiration.
 - **Calls / Both / Puts:** show one side or both. In Both, calls are on the left and puts on the right, with strikes down the middle.
 - **Shading** marks in-the-money strikes. A line shows where the current TQQQ price falls.

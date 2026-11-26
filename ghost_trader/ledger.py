@@ -129,7 +129,7 @@ class Ledger:
         return self.db.q(sql + " ORDER BY id", args)
 
     def shares(self, symbol=SYMBOL):
-        """Shares held of one symbol (TQQQ unless told otherwise: options are TQQQ-only for now)."""
+        """Shares held of one symbol (TQQQ unless told otherwise)."""
         return self.db.val("SELECT SUM(open_qty) FROM lots WHERE run_id=? AND symbol=?", (self.run_id(), symbol), 0)
 
     def holdings(self):
@@ -291,9 +291,10 @@ class Ledger:
             res["msg"] = "Unknown action."
             return res
         sym = o["symbol"]
-        if act not in ("buy_shares", "sell_shares") and sym != SYMBOL:
-            res["msg"] = f"Options are {SYMBOL}-only for now. You can buy and sell shares of {sym}."
-            return res
+        if act in ("buy_to_close", "sell_to_close") and o.get("position_id"):
+            pp = self.position(int(o["position_id"]))
+            if pp:
+                sym = o["symbol"] = pp["symbol"]      # closing: the position's own symbol, whatever the ticket says
         qty = o["qty"]
         if not isinstance(qty, int) or qty <= 0:
             res["msg"] = "Enter how many shares." if act.endswith("shares") else "Enter how many contracts."
@@ -336,10 +337,10 @@ class Ledger:
                     res["warn"] = (f"This trade's collateral ({money(need)}) is {need / av * 100:.1f}% of account value "
                                    f"(warning above {SIZING_WARN * 100:.0f}%). You can still confirm.")
             else:
-                free = self.free_shares()
+                free = self.free_shares(sym)
                 if free < qty * 100:
-                    sh, lk = self.shares(), self.locked_shares()
-                    res["msg"] = (f"Not covered: you hold {sh} shares, {lk} already covering, {max(free, 0)} free. "
+                    sh, lk = self.shares(sym), self.locked_shares(sym)
+                    res["msg"] = (f"Not covered: you hold {sh} {sym} shares, {lk} already covering, {max(free, 0)} free. "
                                   f"Need {qty * 100}.")
                     return res
                 eff.update(premium_c=gross, locks_shares=qty * 100, available_after_c=avail + gross)
@@ -424,9 +425,9 @@ class Ledger:
             return self._sell_shares(o, qty, px, pc, tags, ts)
 
     def _sell_to_open(self, o, qty, px, pc, tags, ts):
-        typ, k, exp = o["type"], o["strike"], o["expiry"]
+        typ, k, exp, sym = o["type"], o["strike"], o["expiry"], o["symbol"]
         prem = pc * 100 * qty
-        lab = label(typ, exp, k)
+        lab = label(typ, exp, k, sym)
         coll = cents(k) * 100 * qty if typ == "put" else 0
         lot_id = None
         if typ == "call":
@@ -435,14 +436,14 @@ class Ledger:
             for r in self.db.q("SELECT lot_id, SUM(open_qty) n FROM positions WHERE run_id=? AND status='open' "
                                "AND type='call' AND side='short' GROUP BY lot_id", (self.run_id(),)):
                 covered[r["lot_id"]] = r["n"] * 100
-            for lot in self.lots():
+            for lot in self.lots(symbol=sym):
                 if lot["open_qty"] - covered.get(lot["id"], 0) > 0:
                     lot_id = lot["id"]
                     break
         pid = self.db.x(
             "INSERT INTO positions(run_id,symbol,type,side,expiry,strike,qty,open_qty,open_price,opened_at,"
             "collateral_c,note,lot_id,realized_c) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (self.run_id(), SYMBOL, typ, "short", exp, k, qty, qty, px, timeutil.iso(ts), coll, o["note"], lot_id, prem))
+            (self.run_id(), sym, typ, "short", exp, k, qty, qty, px, timeutil.iso(ts), coll, o["note"], lot_id, prem))
         self._set_tags(pid, tags)
         detail = f"{money(prem, True)} premium" + (f" · {money(coll)} collateral" if coll else
                                                     f" · {qty * 100} shares now covering")
@@ -458,13 +459,13 @@ class Ledger:
         return {"event_id": ev, "position_id": pid}
 
     def _buy_to_open(self, o, qty, px, pc, tags, ts):
-        typ, k, exp = o["type"], o["strike"], o["expiry"]
+        typ, k, exp, sym = o["type"], o["strike"], o["expiry"], o["symbol"]
         cost = pc * 100 * qty
-        lab = label(typ, exp, k)
+        lab = label(typ, exp, k, sym)
         pid = self.db.x(
             "INSERT INTO positions(run_id,symbol,type,side,expiry,strike,qty,open_qty,open_price,opened_at,note,realized_c)"
             " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (self.run_id(), SYMBOL, typ, "long", exp, k, qty, qty, px, timeutil.iso(ts), o["note"], -cost))
+            (self.run_id(), sym, typ, "long", exp, k, qty, qty, px, timeutil.iso(ts), o["note"], -cost))
         self._set_tags(pid, tags)
         ev = self.event("Trade", f"Buy to open {qty} × {lab} @ {px:.2f}",
                         f"{money(-cost)} cost" + (f" · “{o['note']}”" if o["note"] else ""),
@@ -554,16 +555,23 @@ class Ledger:
         return [dt.date.fromisoformat(r[0]) for r in rows
                 if marketcal.expiration_settle_ready(dt.date.fromisoformat(r[0]), ts)]
 
-    def settle_expiration(self, expiry, close, ts=None):
-        """Settle every open position expiring on `expiry` against the official close. Auto-exercise / assign
-        at >= $0.01 in the money. Returns a list of event ids."""
+    def due_settlements(self, ts):
+        """[(symbol, expiry date)] ready to settle, one per symbol and expiration (each settles at its own close)."""
+        rows = self.db.q("SELECT DISTINCT symbol, expiry FROM positions WHERE run_id=? AND status='open' "
+                         "ORDER BY expiry, symbol", (self.run_id(),))
+        return [(r[0], dt.date.fromisoformat(r[1])) for r in rows
+                if marketcal.expiration_settle_ready(dt.date.fromisoformat(r[1]), ts)]
+
+    def settle_expiration(self, expiry, close, ts=None, symbol=SYMBOL):
+        """Settle every open position of `symbol` expiring on `expiry` against its official close. Auto-exercise /
+        assign at >= $0.01 in the money. Returns a list of event ids."""
         ts = ts or timeutil.now()
         exp = expiry.isoformat() if not isinstance(expiry, str) else expiry
         out = []
         with self.db.tx():
-            rows = self.db.q("SELECT id FROM positions WHERE run_id=? AND status='open' AND expiry=? "
+            rows = self.db.q("SELECT id FROM positions WHERE run_id=? AND status='open' AND expiry=? AND symbol=? "
                              "ORDER BY CASE WHEN type='put' AND side='short' THEN 0 ELSE 1 END, strike",
-                             (self.run_id(), exp))
+                             (self.run_id(), exp, symbol))
             for r in rows:
                 out.append(self._settle_one(self.position(r[0]), close, ts))
         return out
@@ -573,16 +581,17 @@ class Ledger:
         itm = (k - close) if p["type"] == "put" else (close - k)
         itm = round(itm, 4) >= 0.01
         lab = p["label"]
-        closetxt = f"{SYMBOL} closed {close:.2f}."
+        sym = p["symbol"]
+        closetxt = f"{sym} closed {close:.2f}."
         tags = p["tags"]
         if p["side"] == "short" and p["type"] == "put":
             coll = p["collateral_c"]
             if itm:
-                ev = self.event("Assigned", f"Put assigned: bought {n * 100} {SYMBOL} @ {k:.2f}",
+                ev = self.event("Assigned", f"Put assigned: bought {n * 100} {sym} @ {k:.2f}",
                                 f"{lab}. {closetxt} {money(coll)} collateral used. Premium kept {money(p['realized_c'], True)}.",
                                 {"close": close}, tags, ts, position_id=p["id"])
                 self.move("collateral", -coll, "assignment", ts, ev)
-                lid = self._add_lot(n * 100, k, ts, "assigned", "assigned", ev, p["id"])
+                lid = self._add_lot(n * 100, k, ts, "assigned", "assigned", ev, p["id"], symbol=sym)
                 self.db.x("UPDATE events SET lot_id=? WHERE id=?", (lid, ev))
                 self.db.x("UPDATE positions SET lot_id=? WHERE id=?", (lid, p["id"]))
                 status = "assigned"
@@ -596,11 +605,12 @@ class Ledger:
         elif p["side"] == "short":  # covered call
             if itm:
                 proceeds = cents(k) * 100 * n
-                ev = self.event("Called away", f"Shares called away: sold {n * 100} {SYMBOL} @ {k:.2f}",
+                ev = self.event("Called away", f"Shares called away: sold {n * 100} {sym} @ {k:.2f}",
                                 f"{lab}. {closetxt} {money(proceeds, True)} to Available. Premium kept "
                                 f"{money(p['realized_c'], True)}.", {"close": close}, tags, ts, position_id=p["id"],
                                 lot_id=p["lot_id"])
-                taken = self._remove_shares(n * 100, k, ts, "called away", ev, prefer_lot=p["lot_id"], position_id=p["id"])
+                taken = self._remove_shares(n * 100, k, ts, "called away", ev, prefer_lot=p["lot_id"], position_id=p["id"],
+                                            symbol=sym)
                 self.move("available", proceeds, "called away", ts, ev)
                 gain = sum(cents((k - cost) * q) for _, q, cost in taken)
                 self.db.x("UPDATE events SET detail=detail || ? WHERE id=?",
@@ -615,11 +625,11 @@ class Ledger:
             if itm and p["type"] == "call":
                 cost = cents(k) * 100 * n
                 if self.available() >= cost:
-                    ev = self.event("Exercised", f"Call exercised: bought {n * 100} {SYMBOL} @ {k:.2f}",
+                    ev = self.event("Exercised", f"Call exercised: bought {n * 100} {sym} @ {k:.2f}",
                                     f"{lab}. {closetxt} {money(-cost)} from Available.", {"close": close}, tags, ts,
                                     position_id=p["id"])
                     self.move("available", -cost, "exercise", ts, ev)
-                    self._add_lot(n * 100, k, ts, "exercised", "exercised", ev, p["id"])
+                    self._add_lot(n * 100, k, ts, "exercised", "exercised", ev, p["id"], symbol=sym)
                 else:
                     val = cents((close - k) * 100 * n)
                     ev = self.event("Exercised", f"Long call settled for value {money(val, True)}",
@@ -628,12 +638,12 @@ class Ledger:
                     self.move("available", val, "cash settlement", ts, ev)
                 status = "exercised"
             elif itm:
-                if self.free_shares() >= n * 100:
+                if self.free_shares(sym) >= n * 100:
                     proceeds = cents(k) * 100 * n
-                    ev = self.event("Exercised", f"Put exercised: sold {n * 100} {SYMBOL} @ {k:.2f}",
+                    ev = self.event("Exercised", f"Put exercised: sold {n * 100} {sym} @ {k:.2f}",
                                     f"{lab}. {closetxt} {money(proceeds, True)} to Available.", {"close": close},
                                     tags, ts, position_id=p["id"])
-                    self._remove_shares(n * 100, k, ts, "exercised", ev, position_id=p["id"])
+                    self._remove_shares(n * 100, k, ts, "exercised", ev, position_id=p["id"], symbol=sym)
                     self.move("available", proceeds, "exercise", ts, ev)
                 else:
                     val = cents((k - close) * 100 * n)

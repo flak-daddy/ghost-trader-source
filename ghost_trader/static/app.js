@@ -238,8 +238,8 @@ async function renderPortfolio() {
   if (!ui.pfMode && !ui.flashPos) {
     if (st.warnings.length) alerts += `<div class="alert e"><span class=ic>${I("alert")}</span><span><b>${plural(st.warnings.length, "startup warning")}:</b> ${esc(st.warnings[0])}</span><span class="meta lnk" style="margin-left:auto" data-go="history:errors" data-tip="Double-click: open in History">Double-click to open in History</span></div>`;
     for (const a of st.alerts) { const p = a.pos;
-      if (a.kind === "expiring") alerts += `<div class="alert w"><span class=ic>${I("clock")}</span><span><b>Expires this week:</b> ${posLink(p)} (${plural(p.open_qty, "contract")}), ${plural(p.dte, "day")}. ${st.price ? `${"TQQQ"} is ${Math.abs(p.dist * 100).toFixed(1)}% ${S() > p.strike ? "above" : "below"} the strike.` : ""}</span></div>`;
-      if (a.kind === "near") alerts += `<div class="alert w"><span class=ic>${I("warn")}</span><span><b>${S() < p.strike ? "In the money" : "Near the money"}:</b> ${posLink(p)} (${plural(p.open_qty, "contract")}). TQQQ ${f2(S())} is ${Math.abs(p.dist * 100).toFixed(1)}% ${S() >= p.strike ? "above" : "below"} the strike (alert within 3%).</span></div>`;
+      if (a.kind === "expiring") alerts += `<div class="alert w"><span class=ic>${I("clock")}</span><span><b>Expires this week:</b> ${posLink(p)} (${plural(p.open_qty, "contract")}), ${plural(p.dte, "day")}. ${p.dist != null ? `${p.symbol} is ${Math.abs(p.dist * 100).toFixed(1)}% ${p.dist > 0 ? "above" : "below"} the strike.` : ""}</span></div>`;
+      if (a.kind === "near") alerts += `<div class="alert w"><span class=ic>${I("warn")}</span><span><b>${p.dist < 0 ? "In the money" : "Near the money"}:</b> ${posLink(p)} (${plural(p.open_qty, "contract")}). ${p.symbol} ${f2(p.strike * (1 + p.dist))} is ${Math.abs(p.dist * 100).toFixed(1)}% ${p.dist >= 0 ? "above" : "below"} the strike (alert within 3%).</span></div>`;
       if (a.kind === "exdiv") alerts += `<div class="alert w"><span class=ic>${I("warn")}</span><span><b>Early assignment risk:</b> ${posLink(p)} is in the money ahead of the ${esc(a.ex)} ex-dividend date.</span></div>`;
     }
   }
@@ -467,8 +467,12 @@ function drawHeat(el, rows) {
 /* ---------- CHAIN ---------- */
 let chainData = null;
 async function renderChain() {
-  const c = await api("chain", {expiry: ui.chainExp, view: ui.chainView});
-  if (c.error && !c.strikes) { $("#main").innerHTML = `<div class="alert e"><span class=ic>${I("alert")}</span><span>${esc(c.error)}</span></div>`; return; }
+  const c = await api("chain", {expiry: ui.chainExp, view: ui.chainView, symbol: ui.chainSymIn || undefined});
+  ui.chainSymIn = null;
+  if (c.error && !c.strikes) {
+    $("#main").innerHTML = `<div class=bar>${chainSymBox(c.symbol)}</div><div class="alert e"><span class=ic>${I("alert")}</span><span>${esc(c.error)}</span></div>`;
+    wireChainSym(); return; }
+  ui.chainSym = c.symbol;
   chainData = c; ui.chainExp = c.expiry; ui.chainView = c.view || ui.chainView;
   const e = c.expiry, Sx = c.price, held = {};
   c.held.forEach(p => (held[p.strike] = held[p.strike] || []).push(p));
@@ -492,25 +496,38 @@ async function renderChain() {
     const t = view === "calls" ? "call" : "put", q = r[t];
     return `<tr class="${cls}" id="k${K}"><td class=mid>${K}${dot}</td><td class="px${ic(t, K)}" data-k="${K}" data-t="${t}">${f2(q.bid)}</td><td class="px${ic(t, K)}" data-k="${K}" data-t="${t}">${f2(q.ask)}</td><td class="px${ic(t, K)}" data-k="${K}" data-t="${t}"><b>${f2(q.mid)}</b></td><td class="meta${ic(t, K)}">${d2(q.delta)}</td><td class="meta${ic(t, K)}">${vol(q.volume)}</td></tr>`; });
   const cut = ks.findIndex(r => r.k > Sx);
-  const pline = `<tr class=pline>${view === "both" ? `<td colspan=5></td><td class=mid><span>TQQQ ${f2(Sx)}</span></td><td colspan=5></td>` : `<td><span>TQQQ ${f2(Sx)}</span></td><td colspan=5></td>`}</tr>`;
+  const pline = `<tr class=pline>${view === "both" ? `<td colspan=5></td><td class=mid><span>${esc(c.symbol)} ${f2(Sx)}</span></td><td colspan=5></td>` : `<td><span>${esc(c.symbol)} ${f2(Sx)}</span></td><td colspan=5></td>`}</tr>`;
   if (cut >= 0) rows.splice(cut, 0, pline); else rows.push(pline);
   const opts = c.groups.map(([g, list]) => `<optgroup label="${g}">${list.map(x => `<option value="${x.exp}" ${x.exp === e ? "selected" : ""}>${esc(x.label)} · ${x.dte} days</option>`).join("")}</optgroup>`).join("");
   const chg = c.prev_close ? Sx - c.prev_close : null;
-  $("#main").innerHTML = `<div class=bar><input value="TQQQ" size=6 disabled title="TQQQ only for now">
+  $("#main").innerHTML = `<div class=bar>${chainSymBox(c.symbol)}
     <select id=expSel style="width:220px">${opts}</select>
     <div class=seg>${["calls", "both", "puts"].map(v => `<button class="btn ${view === v ? "on" : ""}" data-view="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join("")}</div>
     <span class=meta>Every strike with a bid · ${c.market.open && !c.stale ? "quotes as of " + esc(c.asof) + " (Yahoo, ~15 min delayed)" : "quotes from the " + esc(c.market.close_txt) + " close"} ${c.stale ? `<span class=pill>stale${c.market.open ? "" : " · market closed"}</span>` : ""}</span>
     <button class="btn small" style="margin-left:auto" id=chainRef title="Fetch this chain again">${I("refresh")} Refresh</button></div>
     ${c.error ? `<div class="alert w"><span class=ic>${I("warn")}</span><span>Couldn't refresh this chain (${esc(c.error)}); showing the last good quotes.</span></div>` : ""}
-    <div class=bar><span class=big>TQQQ ${f2(Sx)}</span>${chg == null ? "" : `<span class="${chg >= 0 ? "up" : "down"}">${chg >= 0 ? "+" : "−"}${Math.abs(chg).toFixed(2)} (${chg >= 0 ? "+" : "−"}${Math.abs(chg / c.prev_close * 100).toFixed(2)}%)</span>`}<span class=meta>· <span class=itmkey></span> in the money · <span class=warn>●</span> = you hold this strike · click any price to open a ticket</span></div>
+    <div class=bar><span class=big>${esc(c.symbol)} ${f2(Sx)}</span>${chg == null ? "" : `<span class="${chg >= 0 ? "up" : "down"}">${chg >= 0 ? "+" : "−"}${Math.abs(chg).toFixed(2)} (${chg >= 0 ? "+" : "−"}${Math.abs(chg / c.prev_close * 100).toFixed(2)}%)</span>`}<span class=meta>· <span class=itmkey></span> in the money · <span class=warn>●</span> = you hold this strike · click any price to open a ticket</span></div>
     <div class=chainbox id=chainbox><table class=both><thead>${head}</thead><tbody>${rows.join("") || `<tr><td colspan=11 class=empty>No strikes with a bid for this expiration.</td></tr>`}</tbody></table></div>
     <h2 style="margin-top:18px">Strike × expiration map</h2><div id=chainMap class=card style="padding:12px 14px"><span class=meta><span class=spin>${I("spin")}</span> Getting the next few expirations…</span></div>`;
   loadChainMap();
+  wireChainSym();
   $("#expSel").onchange = ev => { ui.chainExp = ev.target.value; ui.flashStrike = null; render(); };
   $$("[data-view]").forEach(b => b.onclick = () => { ui.chainView = b.dataset.view; render(); });
-  $("#chainRef").onclick = async () => { await api("refresh_quote", {expiry: e, type: "put", strike: atm}); render(); };
-  $$("td.px").forEach(td => td.onclick = () => openTicket({expiry: e, strike: +td.dataset.k, type: td.dataset.t, action: "sell_to_open"}));
+  $("#chainRef").onclick = async () => { await api("refresh_quote", {expiry: e, type: "put", strike: atm, symbol: c.symbol}); render(); };
+  $$("td.px").forEach(td => td.onclick = () => openTicket({symbol: c.symbol, expiry: e, strike: +td.dataset.k, type: td.dataset.t, action: "sell_to_open"}));
   setTimeout(() => { const t = document.getElementById("k" + (ui.flashStrike || atm)), box = $("#chainbox"); if (!box) return; if (t) box.scrollTop = t.offsetTop - box.clientHeight / 2; const hr = box.querySelectorAll("thead tr"); if (hr.length > 1) hr[1].querySelectorAll("th").forEach(th => th.style.top = hr[0].offsetHeight + "px"); }, 0);
+}
+
+/* The Chain's symbol box (v1.23.0): type any stock or ETF Yahoo lists options for; indexes can't be traded. */
+function chainSymBox(sym) {
+  const quick = ["TQQQ", ...(ui.wlSyms || []).filter(s => s[0] !== "^")].filter((s, i, a) => a.indexOf(s) === i).slice(0, 8);
+  return `<input id=chainSym value="${esc(sym || "TQQQ")}" size=7 maxlength=11 style="text-transform:uppercase" placeholder="e.g. SPY" data-tip="Any stock or ETF with options. Press Enter. Indexes can't be traded."><span class=seg>${quick.map(s => `<button class="btn small ${s === sym ? "on" : ""}" data-csym="${esc(s)}">${esc(s)}</button>`).join("")}</span>`;
+}
+function wireChainSym() {
+  const go = s => { s = (s || "").trim().toUpperCase(); if (!s) return; ui.chainSymIn = s; ui.chainExp = null; ui.flashStrike = null; ui.cmap = null; render(); };
+  const i = $("#chainSym"); if (i) i.onkeydown = ev => { if (ev.key === "Enter") go(i.value); }, i.onchange = () => go(i.value);
+  $$("[data-csym]").forEach(b => b.onclick = () => go(b.dataset.csym));
+  if (!ui.wlSyms) api("watchlist").then(r => { ui.wlSyms = (r.rows || []).map(x => x.symbol); }).catch(() => {});
 }
 
 /* ---------- CHAIN HEAT MAP (v1.21.0) ---------- */
@@ -521,7 +538,7 @@ const MAP_METRICS = {
   vol: {name: "Volume", tip: "Contracts traded today.", get: x => x.vol, fmt: v => v >= 10000 ? (v / 1000).toFixed(0) + "k" : v >= 1000 ? (v / 1000).toFixed(1) + "k" : String(v)},
 };
 async function loadChainMap() {
-  const d = await api("chain_map"); ui.cmap = d; drawChainMap();
+  const d = await api("chain_map", {symbol: ui.chainSym || undefined}); ui.cmap = d; drawChainMap();
 }
 function drawChainMap() {
   const el = $("#chainMap"), d = ui.cmap; if (!el || !d) return;
@@ -544,18 +561,18 @@ function drawChainMap() {
     <span class=seg>${Object.entries(MAP_METRICS).map(([k, m]) => `<button class="btn small ${mk === k ? "on" : ""}" data-cmm="${k}" data-tip="${esc(m.tip)}">${m.name}</button>`).join("")}</span>
     <span class=meta style="margin-left:auto">${d.asof ? "quotes " + esc(d.asof) + (d.stale ? " (stale)" : "") : ""}</span></div>
     <div style="overflow:auto"><table class="mini hmap"><thead>${head}</thead><tbody>${body.join("")}</tbody></table></div>
-    <div class=meta style="margin-top:6px">The next ${d.cols.length} expirations, strikes within about 15% of TQQQ, only contracts with a bid. Darker = higher ${esc(M.name.toLowerCase())}. Click a cell to open a sell ticket. ● = you hold it.</div>`;
+    <div class=meta style="margin-top:6px">The next ${d.cols.length} expirations, strikes within about 15% of ${esc(d.symbol || "TQQQ")}, only contracts with a bid. Darker = higher ${esc(M.name.toLowerCase())}. Click a cell to open a sell ticket. ● = you hold it.</div>`;
   $$("[data-cmt]").forEach(b => b.onclick = () => { ui.cmapType = b.dataset.cmt; drawChainMap(); });
   $$("[data-cmm]").forEach(b => b.onclick = () => { ui.cmapMetric = b.dataset.cmm; drawChainMap(); });
-  $$("#chainMap td.hm").forEach(td => td.onclick = () => openTicket({expiry: td.dataset.e, strike: +td.dataset.k, type, action: "sell_to_open"}));
+  $$("#chainMap td.hm").forEach(td => td.onclick = () => openTicket({symbol: d.symbol, expiry: td.dataset.e, strike: +td.dataset.k, type, action: "sell_to_open"}));
 }
 
 /* ---------- TICKET ---------- */
 let tk = null, tkData = null, tkSeq = 0;
 function openTicket(o) {
   if (o.close) { const p = st.positions.find(x => x.id === o.close);
-    tk = {action: p.side === "short" ? "buy_to_close" : "sell_to_close", position_id: p.id, type: p.type, expiry: p.expiry, strike: p.strike, qty: p.open_qty, price: null, note: "", tags: [], close_note: ""}; }
-  else tk = {action: o.action || "sell_to_open", type: o.type, expiry: o.expiry, strike: o.strike, qty: o.qty || 1, price: null, note: o.note || "", tags: [], compare: "dates"};
+    tk = {action: p.side === "short" ? "buy_to_close" : "sell_to_close", position_id: p.id, symbol: p.symbol, type: p.type, expiry: p.expiry, strike: p.strike, qty: p.open_qty, price: null, note: "", tags: [], close_note: ""}; }
+  else tk = {action: o.action || "sell_to_open", symbol: o.symbol || "TQQQ", type: o.type, expiry: o.expiry, strike: o.strike, qty: o.qty || 1, price: null, note: o.note || "", tags: [], compare: "dates"};
   tk.from = o.from || null;
   loadTicket(true);
 }
@@ -682,7 +699,7 @@ function renderTicket() {
     drawPayoff($("#tkPayoff"), d.payoff);
     // v1.12.3: the same small cone as a position's panel, for the option on this ticket
     const key = [tk.type, tk.strike, tk.expiry].join("|");
-    if (d.payoff) api("cone", {days_back: 30, type: tk.type, strike: d.payoff.strike, expiry: d.payoff.expiry, iv: d.payoff.iv}).then(cd => {
+    if (d.payoff) api("cone", {days_back: 30, type: tk.type, strike: d.payoff.strike, expiry: d.payoff.expiry, iv: d.payoff.iv, symbol: tk.symbol}).then(cd => {
       const el = $("#tkCone");
       if (!el || cd.error || [tk.type, tk.strike, tk.expiry].join("|") !== key) return;
       drawCone(el, cd, true);
@@ -699,24 +716,24 @@ function ivSrcShort(s) { return s === "price" ? " (from price)" : s === "nearby"
 function chBasis(c) {
   const iv = (c.iv * 100).toFixed(0) + "%", src = IV_SRC[c.iv_src] || "from the quote";
   const parts = [`IV ${iv}${ivSrcShort(c.iv_src)}`];
-  if (c.S != null) parts.push(`TQQQ $${f2(c.S)}`);
+  if (c.S != null) parts.push(`${tk.symbol || 'TQQQ'} $${f2(c.S)}`);
   if (c.dte != null) parts.push(plural(Math.max(c.dte, 0), "day") + " left");
-  const tip = `Implied volatility ${iv}, ${src}: the market's own guess at how much TQQQ will move. The chances assume that guess is right and say nothing about direction. Days are calendar days.`;
+  const tip = `Implied volatility ${iv}, ${src}: the market's own guess at how much ${tk.symbol || 'TQQQ'} will move. The chances assume that guess is right and say nothing about direction. Days are calendar days.`;
   return `<div class=meta style="text-align:right;font-size:11px" data-tip="${esc(tip)}">Using ${parts.join(" · ")} · estimates, not predictions</div>`;
 }
 function chancesRows(c, type) {
   if (!c) return "";
   const k = kTxt(tk.strike), be = "$" + f2(c.breakeven), pc = v => `<b>${chPct(v)}</b>`;
   const rows = type === "put" ? [
-    ["Chance of expiring worthless", c.worthless, `% chance TQQQ closes above ${k} at expiration: the put expires and you keep the whole premium`],
-    ["Chance of assignment", 1 - c.worthless, `% chance TQQQ closes below ${k} and you buy 100 shares per contract at ${k}`],
-    [`Chance of touching ${k}`, c.touch, `% chance TQQQ trades at or below ${k} at some point before expiration, even if it finishes above. Touching isn't assignment (that depends on the close), but it's when the position looks worst`],
-    ["Chance of profit at expiration", c.profit, `% chance TQQQ closes above ${be}, the breakeven (${k} strike − premium): either expiring worthless, or assigned with the drop smaller than the premium`],
+    ["Chance of expiring worthless", c.worthless, `% chance ${tk.symbol || 'TQQQ'} closes above ${k} at expiration: the put expires and you keep the whole premium`],
+    ["Chance of assignment", 1 - c.worthless, `% chance ${tk.symbol || 'TQQQ'} closes below ${k} and you buy 100 shares per contract at ${k}`],
+    [`Chance of touching ${k}`, c.touch, `% chance ${tk.symbol || 'TQQQ'} trades at or below ${k} at some point before expiration, even if it finishes above. Touching isn't assignment (that depends on the close), but it's when the position looks worst`],
+    ["Chance of profit at expiration", c.profit, `% chance ${tk.symbol || 'TQQQ'} closes above ${be}, the breakeven (${k} strike − premium): either expiring worthless, or assigned with the drop smaller than the premium`],
   ] : [
-    ["Chance of expiring worthless", c.worthless, `% chance TQQQ closes below ${k} at expiration: the call expires, your shares stay, you keep the whole premium`],
-    ["Chance of being called away", 1 - c.worthless, `% chance TQQQ closes above ${k} and your 100 shares per contract are sold at ${k}`],
-    [`Chance of touching ${k}`, c.touch, `% chance TQQQ trades at or above ${k} at some point before expiration, even if it finishes below. Touching isn't being called away (that depends on the close), but it's when your shares look most likely to go`],
-    ["Chance of profit at expiration", c.profit, `% chance TQQQ closes below ${be} (${k} strike + premium), where the premium outweighs what selling at ${k} gives up`],
+    ["Chance of expiring worthless", c.worthless, `% chance ${tk.symbol || 'TQQQ'} closes below ${k} at expiration: the call expires, your shares stay, you keep the whole premium`],
+    ["Chance of being called away", 1 - c.worthless, `% chance ${tk.symbol || 'TQQQ'} closes above ${k} and your 100 shares per contract are sold at ${k}`],
+    [`Chance of touching ${k}`, c.touch, `% chance ${tk.symbol || 'TQQQ'} trades at or above ${k} at some point before expiration, even if it finishes below. Touching isn't being called away (that depends on the close), but it's when your shares look most likely to go`],
+    ["Chance of profit at expiration", c.profit, `% chance ${tk.symbol || 'TQQQ'} closes below ${be} (${k} strike + premium), where the premium outweighs what selling at ${k} gives up`],
   ];
   return `<div class=chances>
     ${rows.filter(r => r[1] != null).map(([lab, v, tip]) => `<div class=row data-tip="${esc(tip)}"><label>${lab}</label><span>${/touching/.test(lab) ? `<b>${touchTxt(c, type, +tk.strike)}</b>` : pc(v)}</span></div>`).join("")}
@@ -864,7 +881,7 @@ async function renderIndicators(refresh) {
   }
   if (ui.tab !== "Indicators") return;
   const d = indData, nw = d.now, n = ui.indN, NN = d.days.length, sel = d.stoch[n] || {k: [], d: null};
-  const SYM = d.symbol || "TQQQ", isT = SYM === "TQQQ";   // implied volatility and your trades exist for TQQQ only
+  const SYM = d.symbol || "TQQQ", isT = SYM === "TQQQ";   // saved implied volatility exists for TQQQ only
   const R = ui.indRanges;
   const startIdx = r => { const cut = isoMinus(RDAYS[r]); const i = d.days.findIndex(x => x >= cut); return i < 0 ? NN : i; };
   const G = {px: startIdx(R.px), st: startIdx(R.st), mood: startIdx(R.mood), vol: startIdx(R.vol || "3M")};
@@ -891,7 +908,7 @@ async function renderIndicators(refresh) {
   const stochTabs = `<div class=stabs role=tablist>${d.lookbacks.map(String).map(k => `<button role=tab class="${k === n ? "on" : ""}" data-in="${k}">${label(k)}</button>`).join("")}<span class=srng>${rseg(ui.indTable ? "px" : "st")}</span></div>`;
   const nTr = Object.keys(d.trades || {}).length;
   const bar = `<div class=bar style="margin-bottom:10px;justify-content:flex-end">
-    ${isT ? `<span class=meta data-tip="Your trades this run, drawn on the charts: ◆ on the price chart, a faint line on the others (blue opened, gray closed, amber assigned or called away, green expired worthless). Hover a day to see them.">Your trades</span>${seg([["0", "Off"], ["1", "On"]], ui.indTrades ? "1" : "0", "data-itr")}` : ""}
+    ${nTr || isT ? `<span class=meta data-tip="Your ${isT ? "" : esc(SYM) + " "}trades this run, drawn on the charts: ◆ on the price chart, a faint line on the others (blue opened, gray closed, amber assigned or called away, green expired worthless). Hover a day to see them.">Your trades</span>${seg([["0", "Off"], ["1", "On"]], ui.indTrades ? "1" : "0", "data-itr")}` : ""}
     ${seg([["layers", "Layers"], ["stacked", "Stacked"]], ui.indLayers === false ? "stacked" : "layers", "data-il")}
     ${seg([["chart", "Chart"], ["table", "Table"]], ui.indTable ? "table" : "chart", "data-iv")}
     <button class="btn small" id=indRef>${I("refresh")} Refresh</button></div>`;
@@ -1063,7 +1080,7 @@ async function openPosPanel(id) {
     ${short ? `<div id=posRoll><button class="btn small" onclick="loadRollMap(${p.id})" data-tip="Map out rolling this option: buy it back, then sell a later one. Nothing is placed; each step opens its own ticket.">Map a roll…</button></div>` : ""}
     ${readingsTable(p.readings)}
     <div class=actions style="justify-content:space-between"><button class=btn onclick="closeDrawer();go('pos:${p.id}')" data-tip="Portfolio, with this position highlighted">Show in Portfolio</button>
-      <span style="display:flex;gap:8px">${short ? `<button class=btn onclick="openTicket({expiry:'${p.expiry}',strike:${p.strike},type:'${p.type}',action:'sell_to_open',from:${p.id}})">Sell more</button>` : ""}
+      <span style="display:flex;gap:8px">${short ? `<button class=btn onclick="openTicket({symbol:'${p.symbol}',expiry:'${p.expiry}',strike:${p.strike},type:'${p.type}',action:'sell_to_open',from:${p.id}})">Sell more</button>` : ""}
       <button class="btn primary" onclick="openTicket({close:${p.id},from:${p.id}})">Close position…</button></span></div></div>`;
   api("cone", {id: p.id, days_back: 30}).then(d => { if ($("#posCone") && !tk) drawCone($("#posCone"), d, true); });
 }
@@ -1088,7 +1105,7 @@ async function loadRollMap(id) {
     ${r.rolls.length ? `<table class=mini style="margin-top:6px"><thead><tr><th class=l>New ${what}</th><th>Net</th><th data-tip="Chance the new one expires worthless">Worthless</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class=meta style="margin-top:6px">No later expirations with a bid right now.</div>`}
     <div class=meta style="margin-top:4px">${r.asof ? "Quotes from " + esc(r.asof) + (r.stale ? " (stale: market closed or quotes old)" : "") : ""}</div></div>`;
   const start = (i, step) => {
-    const x = r.rolls[i], plan = {closeId: p.id, label: p.label, step2: {expiry: x.expiry, strike: x.strike, type: p.type, qty: p.qty, note: "Roll from " + p.label, label: x.label, price: x.price}};
+    const x = r.rolls[i], plan = {closeId: p.id, label: p.label, step2: {symbol: p.symbol, expiry: x.expiry, strike: x.strike, type: p.type, qty: p.qty, note: "Roll from " + p.label, label: x.label, price: x.price}};
     ui.roll = plan;
     if (step === 1) openTicket({close: p.id, from: p.id});
     else openTicket({...plan.step2, action: "sell_to_open", from: p.id});

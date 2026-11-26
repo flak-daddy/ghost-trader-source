@@ -132,18 +132,25 @@ def expiring_today(led, today):
     return [p for p in led.positions() if p["expiry"] == today.isoformat()]
 
 
-def message(positions, price):
+def message(positions, price, prices=None):
+    """`price` is TQQQ's; `prices` ({symbol: price}) covers the other symbols (v1.23.0)."""
     lines = []
+    syms = []
     for p in positions:
+        sym = p.get("symbol") or SYMBOL
+        if sym not in syms:
+            syms.append(sym)
+        px = price if sym == SYMBOL else (prices or {}).get(sym)
         side = "short" if p["side"] == "short" else "long"
-        what = f"{p['open_qty']} × ${p['strike']:g} {'Put' if p['type'] == 'put' else 'Call'} ({side})"
-        if price:
-            itm = price < p["strike"] if p["type"] == "put" else price > p["strike"]
-            pct = abs(price - p["strike"]) / p["strike"] * 100
-            what += f": {SYMBOL} {price:.2f}, {pct:.1f}% {'in' if itm else 'out of'} the money"
+        what = f"{p['open_qty']} × " + (f"{sym} " if sym != SYMBOL else "") + \
+            f"${p['strike']:g} {'Put' if p['type'] == 'put' else 'Call'} ({side})"
+        if px:
+            itm = px < p["strike"] if p["type"] == "put" else px > p["strike"]
+            pct = abs(px - p["strike"]) / p["strike"] * 100
+            what += f": {sym} {px:.2f}, {pct:.1f}% {'in' if itm else 'out of'} the money"
         lines.append(what)
     n = sum(p["open_qty"] for p in positions)
-    title = f"{n} {SYMBOL} contract{'s' if n != 1 else ''} expire today"
+    title = f"{n} {' / '.join(syms) if len(syms) > 1 else syms[0] if syms else SYMBOL} contract{'s' if n != 1 else ''} expire today"
     body = "\n".join(lines) + "\nSettles at the 3:00 PM CT close; the app processes it after 5 PM."
     return title, body
 
@@ -176,7 +183,8 @@ def eod_summary(led, price, today, rate=None):
     lines.append(f"Premium today ${prem / 100:,.2f} · interest about ${intr / 100:,.2f}/day")
     if tomorrow:
         n = sum(p["open_qty"] for p in tomorrow)
-        what = ", ".join(f"${p['strike']:g} {'Put' if p['type'] == 'put' else 'Call'} ×{p['open_qty']}" for p in tomorrow)
+        what = ", ".join((f"{p['symbol']} " if p["symbol"] != SYMBOL else "") +
+                          f"${p['strike']:g} {'Put' if p['type'] == 'put' else 'Call'} ×{p['open_qty']}" for p in tomorrow)
         lines.append(f"Expiring {timeutil.fmt_date(nxt)}: {n} contract{'s' if n != 1 else ''} ({what})")
     else:
         lines.append(f"Nothing expires {timeutil.fmt_date(nxt)}")
@@ -311,7 +319,8 @@ def _morning(led, quote_price, today):
         log.warning("nudge price: %s", e)
     if price is None:
         price = led.db.val("SELECT last FROM quotes WHERE contract=?", ("_U_" + SYMBOL,))
-    title, body = message(pos, price)
+    others = {p["symbol"]: led.price_of(p["symbol"]) for p in pos if p["symbol"] != SYMBOL}
+    title, body = message(pos, price, others)
     ok, msg = send(title, body)
     if ok:
         mark.write_text(title)

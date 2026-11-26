@@ -123,12 +123,12 @@ class YahooProvider:
     def _t(self, sym=None):
         return self.yf.Ticker(sym or self.symbol)
 
-    def underlying(self):
-        fi = self._t().fast_info
+    def underlying(self, symbol=None):
+        fi = self._t(symbol).fast_info
         price = _num(fi["last_price"])
         prev = _num(fi["previous_close"])
         if not price:
-            raise DataError(f"Yahoo returned no price for {self.symbol}.")
+            raise DataError(f"Yahoo returned no price for {symbol or self.symbol}.")
         return {"price": price, "prev_close": prev, "bid": None, "ask": None, "asof": timeutil.iso()}
 
     def stock_bidask(self, symbol=None):
@@ -144,14 +144,14 @@ class YahooProvider:
             raise DataError(f"Yahoo returned no price for {symbol}.")
         return {"price": price, "prev_close": prev, "asof": timeutil.iso()}
 
-    def expirations(self):
-        exps = list(self._t().options)
+    def expirations(self, symbol=None):
+        exps = list(self._t(symbol).options)
         if not exps:
-            raise DataError(f"Yahoo returned no expirations for {self.symbol}.")
+            raise DataError(f"Yahoo has no options for {symbol or self.symbol}.")
         return exps
 
-    def chain(self, expiry):
-        oc = self._t().option_chain(expiry)
+    def chain(self, expiry, symbol=None):
+        oc = self._t(symbol).option_chain(expiry)
         rows = []
         for df, typ in ((oc.calls, "call"), (oc.puts, "put")):
             for r in df.to_dict("records"):
@@ -276,16 +276,19 @@ class DemoProvider:
         k = (d - dt.date(2026, 1, 1)).days
         return round(self.base * (1 + 0.06 * math.sin(k / 9.0) + 0.02 * math.sin(k / 2.3)) + rnd.uniform(-.3, .3), 2)
 
-    def underlying(self):
+    def underlying(self, symbol=None):
         self._chk("underlying")
         today = timeutil.today_ct()
-        p = self._price_on(today)
-        prev = self._price_on(marketcal.prev_trading_day(today))
+        k = self._scale(symbol)
+        p = round(self._price_on(today) * k, 2)
+        prev = round(self._price_on(marketcal.prev_trading_day(today)) * k, 2)
         return {"price": p, "prev_close": prev, "bid": round(p - .01, 2), "ask": round(p + .01, 2),
                 "asof": timeutil.iso()}
 
-    def expirations(self):
+    def expirations(self, symbol=None):
         self._chk("expirations")
+        if symbol and symbol.startswith("ZZ"):
+            raise DataError(f"Demo: {symbol} has no options.")
         today = timeutil.today_ct()
         out = []
         d = today + dt.timedelta(days=(4 - today.weekday()) % 7)
@@ -300,9 +303,9 @@ class DemoProvider:
         out.append(marketcal._nth_weekday(today.year + 2, 1, 4, 3))
         return sorted({x.isoformat() for x in out if x >= today})
 
-    def chain(self, expiry):
+    def chain(self, expiry, symbol=None):
         self._chk("chain")
-        S = self.underlying()["price"]
+        S = self.underlying(symbol)["price"]
         e = dt.date.fromisoformat(expiry)
         T = year_frac(e) + 0.25 / 365
         rows = []
@@ -532,6 +535,7 @@ class Quotes:
         self._chains = {}
         self._und = None
         self._exps = None
+        self._exps_o = {}      # expirations of the other symbols (v1.23.0)
         self._syms = {}
 
     # underlying ---------------------------------------------------------------------------------------
@@ -571,41 +575,46 @@ class Quotes:
                   ("_U_" + SYMBOL, SYMBOL, float(price), u["asof"]))
         return u
 
-    def expirations(self, fresh=False):
-        if self._exps and not fresh:
-            return self._exps
+    def expirations(self, fresh=False, symbol=SYMBOL):
+        cached = self._exps if symbol == SYMBOL else self._exps_o.get(symbol)
+        if cached and not fresh:
+            return cached
         today = timeutil.today_ct().isoformat()
         try:
-            ex = [e for e in self.p.expirations() if e >= today]
+            ex = [e for e in (self.p.expirations() if symbol == SYMBOL else self.p.expirations(symbol)) if e >= today]
             self.db.x("INSERT OR REPLACE INTO quotes(contract,symbol,type,asof) VALUES(?,?,?,?)",
-                      ("_EXPS_" + SYMBOL, SYMBOL, json.dumps(ex), timeutil.iso()))
+                      ("_EXPS_" + symbol, symbol, json.dumps(ex), timeutil.iso()))
         except Exception as e:  # noqa: BLE001
-            r = self.db.one("SELECT type FROM quotes WHERE contract=?", ("_EXPS_" + SYMBOL,))
+            r = self.db.one("SELECT type FROM quotes WHERE contract=?", ("_EXPS_" + symbol,))
             if not r:
-                raise DataError(f"No expiration list: {e}")
+                raise DataError(f"No expiration list for {symbol}: {e}")
             ex = [x for x in json.loads(r[0]) if x >= today]
-        self._exps = ex
+        if symbol == SYMBOL:
+            self._exps = ex
+        else:
+            self._exps_o[symbol] = ex
         return ex
 
     # chains -------------------------------------------------------------------------------------------
-    def chain(self, expiry, fresh=False):
+    def chain(self, expiry, fresh=False, symbol=SYMBOL):
         """Returns {'rows': [...], 'asof', 'stale', 'error'} with mid and delta filled in."""
+        ck = (symbol, expiry)
         with self._lock:
-            c = self._chains.get(expiry)
+            c = self._chains.get(ck)
             if c and not fresh and time.time() - c["_t"] < self.CACHE_S:
                 return c
         err = None
         try:
-            rows = self.p.chain(expiry)
+            rows = self.p.chain(expiry) if symbol == SYMBOL else self.p.chain(expiry, symbol)
             asof = timeutil.iso()
             stale = False
             with self.db.tx():
                 for r in rows:
-                    key = occ(SYMBOL, expiry, r["type"], r["strike"])
+                    key = occ(symbol, expiry, r["type"], r["strike"])
                     if r["bid"] or r["ask"]:
                         self.db.x("INSERT OR REPLACE INTO quotes(contract,symbol,expiry,type,strike,bid,ask,last,iv,asof)"
                                   " VALUES(?,?,?,?,?,?,?,?,?,?)",
-                                  (key, SYMBOL, expiry, r["type"], r["strike"], r["bid"], r["ask"], r["last"], r["iv"], asof))
+                                  (key, symbol, expiry, r["type"], r["strike"], r["bid"], r["ask"], r["last"], r["iv"], asof))
                     else:
                         # Yahoo often blanks bid/ask outside market hours: fall back to the last good quote.
                         g = self.db.one("SELECT bid, ask, iv, asof FROM quotes WHERE contract=?", (key,))
@@ -616,24 +625,24 @@ class Quotes:
         except Exception as e:  # noqa: BLE001
             log.warning("chain %s failed: %s", expiry, e)
             err = str(e)
-            got = self.db.q("SELECT * FROM quotes WHERE symbol=? AND expiry=?", (SYMBOL, expiry))
+            got = self.db.q("SELECT * FROM quotes WHERE symbol=? AND expiry=?", (symbol, expiry))
             if not got:
-                raise DataError(f"No quotes for {expiry}: {e}")
+                raise DataError(f"No quotes for {symbol} {expiry}: {e}")
             rows = [{"type": g["type"], "strike": g["strike"], "bid": g["bid"] or 0.0, "ask": g["ask"] or 0.0,
                      "last": g["last"], "iv": g["iv"], "asof": g["asof"], "fallback": True} for g in got]
             asof = min(g["asof"] for g in got)
             stale = True
-        self._enrich(rows, expiry)
+        self._enrich(rows, expiry, symbol)
         out = {"rows": rows, "asof": asof, "stale": stale, "error": err, "_t": time.time()}
         with self._lock:
-            self._chains[expiry] = out
+            self._chains[ck] = out
         return out
 
-    def _enrich(self, rows, expiry):
-        S = (self._und or {}).get("price")
+    def _enrich(self, rows, expiry, symbol=SYMBOL):
+        S = (self._und or {}).get("price") if symbol == SYMBOL else None
         if S is None:
             try:
-                S = self.underlying()["price"]
+                S = self.underlying()["price"] if symbol == SYMBOL else self.symbol_quote(symbol)["last"]
             except DataError:
                 S = None
         r = (self.rates.for_day(timeutil.today_ct()) or 4.0) / 100
@@ -645,8 +654,8 @@ class Quotes:
             iv = x.get("iv")
             x["delta"] = round(bs(S, x["strike"], T, r, iv, x["type"] == "call")[1], 2) if (S and iv) else None
 
-    def quote(self, expiry, type_, strike, fresh=True):
-        c = self.chain(expiry, fresh=fresh)
+    def quote(self, expiry, type_, strike, fresh=True, symbol=SYMBOL):
+        c = self.chain(expiry, fresh=fresh, symbol=symbol)
         for x in c["rows"]:
             if x["type"] == type_ and abs(x["strike"] - float(strike)) < 1e-6:
                 q = dict(x)
